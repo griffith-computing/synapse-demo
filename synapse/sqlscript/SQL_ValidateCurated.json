@@ -1,0 +1,21 @@
+{
+  "name": "SQL_ValidateCurated",
+  "type": "Microsoft.Synapse/workspaces/sqlscripts",
+  "properties": {
+    "folder": {
+      "name": "poc"
+    },
+    "content": {
+      "query": "-- Deterministic validation of the curated sample CSV using the serverless SQL pool.\n-- No credentials are embedded: OPENROWSET relies on the workspace's managed identity /\n-- delegated AAD access already granted (Storage Blob Data Reader) on the ADLS account.\n-- Replace REPLACE_WITH_STORAGE_ACCOUNT with the environment-specific value used for\n-- LS_AdlsGen2_ManagedIdentity (see config/<env>.parameters.json).\nSELECT\n    COUNT(*) AS row_count,\n    COUNT(DISTINCT customer_id) AS distinct_customer_ids,\n    SUM(CASE WHEN customer_id IS NULL OR customer_name IS NULL THEN 1 ELSE 0 END) AS null_key_rows\nFROM OPENROWSET(\n    BULK 'https://REPLACE_WITH_STORAGE_ACCOUNT.dfs.core.windows.net/curated/sample/sample_customers.csv',\n    FORMAT = 'CSV',\n    PARSER_VERSION = '2.0',\n    FIRSTROW = 2\n) WITH (\n    customer_id   VARCHAR(50) 1,\n    customer_name VARCHAR(200) 2,\n    region        VARCHAR(50) 3,\n    signup_date   VARCHAR(20) 4\n) AS curated_rows;\n",
+      "metadata": {
+        "language": "sql"
+      },
+      "currentConnection": {
+        "databaseName": "master",
+        "poolName": "Built-in"
+      },
+      "resultLimit": 5000
+    },
+    "type": "SqlQuery"
+  }
+}

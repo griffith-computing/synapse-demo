@@ -1,0 +1,85 @@
+##
+# Manual rollback workflow: redeploys a previously published immutable
+# infra release package (selected by prior workflow run + artifact name)
+# to a chosen environment, without rebuilding. Delegates to the reusable
+# deploy-environment.yml workflow (same OIDC login, approvals, smoke
+# test path) with is-rollback=true, so
+# scripts/Invoke-SynapseRollback.ps1 verifies/selects the package before
+# scripts/Deploy-SynapseWorkspace.ps1 redeploys it.
+#
+# Per docs/deployment-runbook.md "Rollback semantics and limits": this is
+# a forward redeploy of a prior known-good infra template + parameters,
+# not a transactional/data-plane rollback.
+#
+# Run this workflow manually and supply:
+#   - environment: dev | test | prod
+#   - source_run_id: the "Deploy" workflow run ID that published the
+#     artifact you want to roll back to
+#   - artifact_name: the artifact name from that run (e.g.
+#     synapse-infra-release-42-abc1234)
+#   - package_version: the version encoded in that artifact (e.g.
+#     42-abc1234) - used by Invoke-SynapseRollback.ps1 to explicitly
+#     confirm the intended package rather than guessing the newest one.
+##
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      source_run_id:
+        description: Run ID of the Deploy workflow run that published the artifact to roll back to
+        required: true
+        type: string
+      artifact_name:
+        description: Name of the immutable infra release artifact to redeploy (e.g. synapse-infra-release-42-abc1234)
+        required: true
+        type: string
+      package_version:
+        description: Version encoded in that artifact (e.g. 42-abc1234)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read # required to download an artifact from a prior workflow run
+
+jobs:
+  fetch-package:
+    name: Fetch prior release package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download prior immutable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: package
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Re-publish artifact for rollback job
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-${{ inputs.artifact_name }}
+          path: package/**
+          if-no-files-found: error
+
+  rollback:
+    name: Rollback (${{ inputs.environment }})
+    needs: fetch-package
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: ${{ inputs.environment }}
+      artifact-name: rollback-${{ inputs.artifact_name }}
+      package-version: ${{ inputs.package_version }}
+      is-rollback: true
+    permissions:
+      id-token: write
+      contents: read

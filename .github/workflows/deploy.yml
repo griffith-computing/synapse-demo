@@ -1,0 +1,114 @@
+##
+# Build-once, promote-everywhere deployment pipeline for the Synapse PoC
+# infra (Bicep) templates.
+#
+# 1. package  - builds a single immutable, versioned release artifact
+#               from infra/ via scripts/New-SynapseReleasePackage.ps1.
+# 2. deploy-dev/test/prod - the SAME artifact is promoted through each
+#               environment (no rebuild). Each stage delegates to the
+#               reusable deploy-environment.yml workflow, which applies
+#               that environment's required GitHub Environment approvals,
+#               OIDC login, offline what-if, deploy and smoke test.
+#
+# synapse/ artifacts (pipelines/datasets/notebooks/SQL scripts) and their
+# per-environment parameter overrides (config/<env>.json) are packaged
+# alongside infra/ into the same immutable release artifact and published
+# to the target workspace via scripts/Publish-SynapseArtifacts.ps1 inside
+# deploy-environment.yml, after the infra (Bicep) deployment completes for
+# that environment (artifact typeProperties reference infra outputs such
+# as the storage account's dfs endpoint, so infra must deploy first).
+#
+# ASSUMPTION: scripts/New-SynapseReleasePackage.ps1 accepts -SourcePaths
+# <path[]> -OutputDirectory <path> -Version <string> and produces a
+# single immutable zip + manifest.json + checksums.sha256 at
+# OutputDirectory (immutability enforced by using the workflow run
+# number + short git SHA as the version, so a given artifact name is
+# never reused/overwritten).
+##
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Only one promotion pipeline in flight at a time; later pushes queue
+# rather than cancel an in-progress promotion.
+concurrency:
+  group: deploy-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build immutable infra release package
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.meta.outputs.artifact-name }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute release version
+        id: meta
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0,7)
+          $version = "${{ github.run_number }}-$shortSha"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "artifact-name=synapse-infra-release-$version" >> $env:GITHUB_OUTPUT
+
+      - name: Package infra release
+        shell: pwsh
+        run: |
+          ./scripts/New-SynapseReleasePackage.ps1 `
+            -SourcePaths "${{ github.workspace }}/infra,${{ github.workspace }}/synapse,${{ github.workspace }}/config" `
+            -OutputDirectory "${{ github.workspace }}/dist" `
+            -Version "${{ steps.meta.outputs.version }}"
+
+      - name: Publish immutable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact-name }}
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy-dev:
+    name: Deploy (dev)
+    needs: package
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: dev
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read
+
+  deploy-test:
+    name: Deploy (test)
+    needs: [package, deploy-dev]
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: test
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read
+
+  deploy-prod:
+    name: Deploy (prod)
+    needs: [package, deploy-test]
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read

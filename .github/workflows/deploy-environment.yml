@@ -1,0 +1,172 @@
+##
+# Reusable deployment/rollback workflow for a single environment
+# (dev/test/prod). Called by deploy.yml (promotion) and rollback.yml
+# (rollback). All deployment logic lives in scripts/ (owned by the
+# scripts/ workstream) - this file only orchestrates.
+#
+# Flow per docs/deployment-runbook.md:
+#   1. Download the immutable infra release package (built once by
+#      deploy.yml's package job) and expand it.
+#   2. Azure sign-in via OIDC / workload identity federation.
+#   3. Offline validate (what-if) - skipped for rollback, since rollback
+#      redeploys a package that already passed what-if during its
+#      original promotion run.
+#   4. Deploy (or, for rollback, select + redeploy the prior package).
+#   5. Smoke test.
+#
+# ASSUMPTIONS on shared script interfaces (owned by scripts/, not this
+# workflow):
+#   Test-SynapseRepository.ps1 -ArtifactManifestPath <path> -ArtifactBasePath <path> -Offline
+#   Deploy-SynapseWorkspace.ps1 -ResourceGroupName <rg> -WorkspaceName <name> `
+#     -TemplateFile <path> -TemplateParametersFile <path> -SubscriptionId <id> [-DryRun]
+#   Publish-SynapseArtifacts.ps1 -ArtifactsRoot <path> -ConfigFile <path> `
+#     -WorkspaceName <name> -SubscriptionId <id> -TokenValues 'KEY=value' [-Offline]
+#   Invoke-SynapseRollback.ps1 -PackageDirectory <path> -TargetVersion <version>
+#   Invoke-SynapseSmokeTests.ps1 -TestDefinitionsPath <path>
+# Per-environment, non-secret Azure identifiers and the Synapse
+# workspace/resource-group names are expected to be configured as GitHub
+# Environment variables (Settings > Environments > <env> > Variables):
+# AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+# AZURE_RESOURCE_GROUP, SYNAPSE_WORKSPACE_NAME. Required
+# approvals/reviewers for test/prod are configured on those same GitHub
+# Environments per docs/deployment-runbook.md - this workflow only
+# references the environment name.
+#
+# ASSUMPTION: tests/fixtures/smoke-tests.sample.json (or an
+# environment-specific equivalent) exists and is supplied by the
+# tests/scripts workstream; this workflow references it by convention.
+##
+name: Deploy to environment (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment name (dev, test, prod)
+        required: true
+        type: string
+      artifact-name:
+        description: Name of the immutable infra release artifact to deploy
+        required: true
+        type: string
+      package-version:
+        description: Release version encoded in the package (used for rollback candidate selection)
+        required: true
+        type: string
+      is-rollback:
+        description: When true, invokes Invoke-SynapseRollback.ps1 to verify/select the package instead of a fresh what-if
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # required for OIDC federation with Azure
+  contents: read
+
+concurrency:
+  # Exclusive per-environment deployment: a second deploy/rollback to the
+  # same environment must wait rather than run concurrently.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: ${{ inputs.is-rollback && 'Rollback' || 'Deploy' }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download immutable infra release package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: package
+
+      - name: Expand release package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path package -Filter *.zip | Select-Object -First 1
+          if (-not $zip) { throw "No .zip package found in downloaded artifact." }
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath package-extracted -Force
+
+      - name: Verify package integrity
+        shell: pwsh
+        run: |
+          $manifest = Get-ChildItem -Path package -Filter *.manifest.json | Select-Object -First 1
+          if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
+          ./scripts/Test-SynapseRepository.ps1 -RepositoryRoot "${{ github.workspace }}" -ArtifactManifestPath $manifest.FullName -ArtifactBasePath (Resolve-Path package-extracted) -Offline
+
+      - name: Azure login (OIDC / workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Select and verify rollback candidate
+        if: ${{ inputs.is-rollback }}
+        shell: pwsh
+        run: |
+          ./scripts/Invoke-SynapseRollback.ps1 `
+            -PackageDirectory "${{ github.workspace }}/package" `
+            -TargetVersion "${{ inputs.package-version }}"
+
+      - name: Offline what-if validation
+        if: ${{ !inputs.is-rollback }}
+        shell: pwsh
+        run: |
+          ./scripts/Deploy-SynapseWorkspace.ps1 `
+            -ResourceGroupName "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -TemplateFile "${{ github.workspace }}/package-extracted/main.bicep" `
+            -TemplateParametersFile "${{ github.workspace }}/package-extracted/parameters/${{ inputs.environment }}.bicepparam" `
+            -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}" `
+            -DryRun
+
+      - name: Deploy / redeploy package
+        id: deploy_infra
+        shell: pwsh
+        run: |
+          ./scripts/Deploy-SynapseWorkspace.ps1 `
+            -ResourceGroupName "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -TemplateFile "${{ github.workspace }}/package-extracted/main.bicep" `
+            -TemplateParametersFile "${{ github.workspace }}/package-extracted/parameters/${{ inputs.environment }}.bicepparam" `
+            -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+
+      - name: Resolve infra outputs for artifact publishing
+        id: infra_outputs
+        shell: pwsh
+        run: |
+          $dfsEndpoint = az deployment group show `
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            --name "synapse-${{ vars.SYNAPSE_WORKSPACE_NAME }}-latest" `
+            --query "properties.outputs.storageAccountDfsEndpoint.value" -o tsv 2>$null
+          if (-not $dfsEndpoint) {
+            # Fall back to the most recent deployment in the resource group
+            # if the deployment name convention above doesn't match (the
+            # deployment name is generated by Deploy-SynapseWorkspace.ps1
+            # using the workspace name and a timestamp).
+            $dfsEndpoint = az deployment group list `
+              --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" `
+              --query "[?starts_with(name, 'synapse-${{ vars.SYNAPSE_WORKSPACE_NAME }}-')] | sort_by(@, &properties.timestamp)[-1].properties.outputs.storageAccountDfsEndpoint.value" -o tsv
+          }
+          if (-not $dfsEndpoint) { throw "Unable to resolve storageAccountDfsEndpoint from the infra deployment output." }
+          echo "storage-dfs-endpoint=$dfsEndpoint" >> $env:GITHUB_OUTPUT
+
+      - name: Publish Synapse workspace artifacts
+        shell: pwsh
+        run: |
+          ./scripts/Publish-SynapseArtifacts.ps1 `
+            -ArtifactsRoot "${{ github.workspace }}/synapse" `
+            -ConfigFile "${{ github.workspace }}/config/${{ inputs.environment }}.json" `
+            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}" `
+            -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=${{ steps.infra_outputs.outputs.storage-dfs-endpoint }}"
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          ./scripts/Invoke-SynapseSmokeTests.ps1 -TestDefinitionsPath "${{ github.workspace }}/tests/fixtures/smoke-tests.sample.json"

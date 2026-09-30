@@ -1,0 +1,35 @@
+{
+  "name": "DS_Curated_Customers_Csv",
+  "type": "Microsoft.Synapse/workspaces/datasets",
+  "properties": {
+    "annotations": [
+      "poc",
+      "synapse-demo"
+    ],
+    "linkedServiceName": {
+      "referenceName": "LS_AdlsGen2_ManagedIdentity",
+      "type": "LinkedServiceReference"
+    },
+    "type": "DelimitedText",
+    "typeProperties": {
+      "location": {
+        "type": "AzureBlobFSLocation",
+        "fileSystem": "curated",
+        "folderPath": "sample",
+        "fileName": "sample_customers.csv"
+      },
+      "columnDelimiter": ",",
+      "rowDelimiter": "\n",
+      "escapeChar": "\\",
+      "quoteChar": "\"",
+      "firstRowAsHeader": true,
+      "compressionCodec": "none"
+    },
+    "schema": [
+      { "name": "customer_id", "type": "String" },
+      { "name": "customer_name", "type": "String" },
+      { "name": "region", "type": "String" },
+      { "name": "signup_date", "type": "String" }
+    ]
+  }
+}

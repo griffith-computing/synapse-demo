@@ -1,0 +1,44 @@
+##
+# Shared, non-secret placeholder variables for the Synapse PoC Azure
+# DevOps pipelines. Replace the placeholder values (or override them at
+# the pipeline/environment level in the ADO UI) with real values for your
+# subscription. None of these are secrets - they are resource identifiers
+# only. Actual Azure sign-in is performed via the WIF-based service
+# connections named below (Project Settings > Service connections),
+# which must be created out-of-band and require no client secret.
+##
+variables:
+  # Azure Resource Manager service connections (type: Azure Resource
+  # Manager, authentication: Workload Identity federation) - one per
+  # environment so each can be scoped/approved independently.
+  - name: serviceConnection.dev
+    value: 'sc-synapse-dev-wif'
+  - name: serviceConnection.test
+    value: 'sc-synapse-test-wif'
+  - name: serviceConnection.prod
+    value: 'sc-synapse-prod-wif'
+
+  # Per-environment Azure resource placeholders.
+  - name: resourceGroup.dev
+    value: 'rg-synapse-poc-dev'
+  - name: resourceGroup.test
+    value: 'rg-synapse-poc-test'
+  - name: resourceGroup.prod
+    value: 'rg-synapse-poc-prod'
+
+  - name: workspaceName.dev
+    value: 'synws-poc-dev'
+  - name: workspaceName.test
+    value: 'synws-poc-test'
+  - name: workspaceName.prod
+    value: 'synws-poc-prod'
+
+  - name: subscriptionId.dev
+    value: '00000000-0000-0000-0000-000000000000'
+  - name: subscriptionId.test
+    value: '00000000-0000-0000-0000-000000000000'
+  - name: subscriptionId.prod
+    value: '00000000-0000-0000-0000-000000000000'
+
+  - name: releaseArtifactName
+    value: 'synapse-infra-release'

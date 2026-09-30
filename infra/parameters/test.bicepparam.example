@@ -1,0 +1,31 @@
+using '../main.bicep'
+
+// SANITIZED EXAMPLE - copy to test.bicepparam and adjust values for your
+// subscription/tenant before use. Contains no secrets or real identifiers.
+//
+// Deploy (after copying and editing):
+//   $env:SYNAPSE_SQL_ADMIN_PASSWORD = '<your-password>'
+//   az deployment group create -g <rg-name> -f infra/main.bicep -p infra/parameters/test.bicepparam
+param environmentName = 'test'
+param namePrefix = 'syn'
+param location = 'eastus2'
+
+// Test environment still allows public access for shared QA access; narrow
+// this once network isolation is validated.
+param publicNetworkAccess = 'Enabled'
+
+param sqlAdministratorLogin = 'synapseadmin'
+param sqlAdministratorLoginPassword = readEnvironmentVariable('SYNAPSE_SQL_ADMIN_PASSWORD')
+
+param deployKeyVault = true
+param deploySparkPool = true
+param sparkPoolNodeSize = 'Small'
+param deployDiagnostics = false
+param logAnalyticsWorkspaceId = ''
+param managedVirtualNetworkEnabled = false
+
+param tags = {
+  environment: 'test'
+  workload: 'synapse-poc'
+  managedBy: 'bicep'
+}

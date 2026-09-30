@@ -1,0 +1,200 @@
+##
+# Reusable deployment/rollback stage template (dev/test/prod).
+#
+# Keeps azure-pipelines/deploy.yml and azure-pipelines/rollback.yml thin:
+# all environment wiring lives here; all deployment logic lives in
+# scripts/Deploy-SynapseWorkspace.ps1, scripts/Publish-SynapseArtifacts.ps1,
+# scripts/Invoke-SynapseRollback.ps1, scripts/Test-SynapseRepository.ps1 and
+# scripts/Invoke-SynapseSmokeTests.ps1 (owned by the scripts/ workstream).
+#
+# Azure authentication uses the pipeline's Azure Resource Manager service
+# connection configured for Workload Identity Federation (OIDC) - no
+# client secret is stored or referenced anywhere in this repo.
+# `addSpnToEnvironment: true` only exposes the short-lived federated
+# token/app id for the duration of the task; it is not a secret we manage.
+#
+# Approvals for test/prod and the "exclusive lock" (only one deployment
+# running at a time per environment) are configured on the Azure DevOps
+# **Environment** resource itself (Pipelines > Environments > <name> >
+# Approvals and checks) - this template only references the environment
+# by name via the `environment:` property below.
+#
+# ASSUMPTION: tests/fixtures/smoke-tests.sample.json (or an
+# environment-specific equivalent) exists and is supplied by the
+# tests/scripts workstream; this template references it by convention.
+##
+parameters:
+  - name: stageName # unique stage identifier, e.g. Deploy_Dev / Rollback_Prod
+    type: string
+  - name: displayName # human readable stage/job display name
+    type: string
+  - name: environmentName # dev | test | prod - must match an ADO Environment name
+    type: string
+  - name: serviceConnection # name of the WIF-based ARM service connection
+    type: string
+  - name: resourceGroupName
+    type: string
+  - name: workspaceName
+    type: string
+  - name: subscriptionId
+    type: string
+  - name: dependsOn
+    type: object
+    default: []
+  - name: isRollback
+    type: boolean
+    default: false
+  - name: packageVersion # version encoded in the release package - required when isRollback == true (used for rollback candidate selection); unused for a forward deploy
+    type: string
+    default: ''
+  - name: downloadMode # 'current' (same-run artifact) or 'specific' (prior run, for rollback)
+    type: string
+    default: current
+  - name: sourceBuildId # required when downloadMode == 'specific'
+    type: string
+    default: ''
+  - name: pipelineResourceAlias # name/ID of the Deploy pipeline definition to pull a specific prior run from, required when downloadMode == 'specific'
+    type: string
+    default: ''
+  - name: artifactName
+    type: string
+    default: synapse-infra-release
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
+    dependsOn: ${{ parameters.dependsOn }}
+    jobs:
+      - deployment: Deploy
+        displayName: ${{ parameters.displayName }}
+        environment: ${{ parameters.environmentName }}
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - ${{ if eq(parameters.downloadMode, 'current') }}:
+                    - download: current
+                      artifact: ${{ parameters.artifactName }}
+                      displayName: Download immutable infra release package (current run)
+
+                - ${{ if eq(parameters.downloadMode, 'specific') }}:
+                    - task: DownloadPipelineArtifact@2
+                      displayName: Download immutable infra release package (prior run)
+                      inputs:
+                        source: specific
+                        project: $(System.TeamProject)
+                        pipeline: ${{ parameters.pipelineResourceAlias }}
+                        runVersion: specific
+                        runId: ${{ parameters.sourceBuildId }}
+                        artifact: ${{ parameters.artifactName }}
+                        path: $(Pipeline.Workspace)/${{ parameters.artifactName }}
+
+                - pwsh: |
+                    $zip = Get-ChildItem -Path "$(Pipeline.Workspace)/${{ parameters.artifactName }}" -Filter *.zip | Select-Object -First 1
+                    if (-not $zip) { throw "No .zip package found in downloaded artifact." }
+                    Expand-Archive -LiteralPath $zip.FullName -DestinationPath "$(Pipeline.Workspace)/package-extracted" -Force
+                  displayName: Expand release package
+
+                - pwsh: |
+                    $manifest = Get-ChildItem -Path "$(Pipeline.Workspace)/${{ parameters.artifactName }}" -Filter *.manifest.json | Select-Object -First 1
+                    if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
+                    Write-Host "##vso[task.setvariable variable=manifestPath]$($manifest.FullName)"
+                  displayName: Locate release manifest
+
+                - task: PowerShell@2
+                  displayName: Verify package integrity
+                  inputs:
+                    targetType: filePath
+                    filePath: $(Build.SourcesDirectory)/scripts/Test-SynapseRepository.ps1
+                    arguments: >-
+                      -RepositoryRoot "$(Build.SourcesDirectory)"
+                      -ArtifactManifestPath "$(manifestPath)"
+                      -ArtifactBasePath "$(Pipeline.Workspace)/package-extracted"
+                      -Offline
+                    pwsh: true
+
+                - ${{ if eq(parameters.isRollback, true) }}:
+                    - task: AzureCLI@2
+                      displayName: Select and verify rollback candidate
+                      inputs:
+                        azureSubscription: ${{ parameters.serviceConnection }}
+                        scriptType: pscore
+                        scriptLocation: scriptPath
+                        scriptPath: $(Build.SourcesDirectory)/scripts/Invoke-SynapseRollback.ps1
+                        arguments: >-
+                          -PackageDirectory "$(Pipeline.Workspace)/${{ parameters.artifactName }}"
+                          -TargetVersion "${{ parameters.packageVersion }}"
+                        addSpnToEnvironment: true
+
+                - ${{ if eq(parameters.isRollback, false) }}:
+                    - task: AzureCLI@2
+                      displayName: Offline what-if validation
+                      inputs:
+                        azureSubscription: ${{ parameters.serviceConnection }}
+                        scriptType: pscore
+                        scriptLocation: scriptPath
+                        scriptPath: $(Build.SourcesDirectory)/scripts/Deploy-SynapseWorkspace.ps1
+                        arguments: >-
+                          -ResourceGroupName "${{ parameters.resourceGroupName }}"
+                          -WorkspaceName "${{ parameters.workspaceName }}"
+                          -TemplateFile "$(Pipeline.Workspace)/package-extracted/main.bicep"
+                          -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/parameters/${{ parameters.environmentName }}.bicepparam"
+                          -SubscriptionId "${{ parameters.subscriptionId }}"
+                          -DryRun
+                        addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Deploy or redeploy package
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: scriptPath
+                    scriptPath: $(Build.SourcesDirectory)/scripts/Deploy-SynapseWorkspace.ps1
+                    arguments: >-
+                      -ResourceGroupName "${{ parameters.resourceGroupName }}"
+                      -WorkspaceName "${{ parameters.workspaceName }}"
+                      -TemplateFile "$(Pipeline.Workspace)/package-extracted/main.bicep"
+                      -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/parameters/${{ parameters.environmentName }}.bicepparam"
+                      -SubscriptionId "${{ parameters.subscriptionId }}"
+                    addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Resolve infra outputs for artifact publishing
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      $dfsEndpoint = az deployment group list `
+                        --resource-group "${{ parameters.resourceGroupName }}" `
+                        --query "[?starts_with(name, 'synapse-${{ parameters.workspaceName }}-')] | sort_by(@, &properties.timestamp)[-1].properties.outputs.storageAccountDfsEndpoint.value" -o tsv
+                      if (-not $dfsEndpoint) { throw "Unable to resolve storageAccountDfsEndpoint from the infra deployment output." }
+                      Write-Host "##vso[task.setvariable variable=storageDfsEndpoint]$dfsEndpoint"
+                    addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Publish Synapse workspace artifacts
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: scriptPath
+                    scriptPath: $(Build.SourcesDirectory)/scripts/Publish-SynapseArtifacts.ps1
+                    arguments: >-
+                      -ArtifactsRoot "$(Pipeline.Workspace)/package-extracted/synapse"
+                      -ConfigFile "$(Pipeline.Workspace)/package-extracted/config/${{ parameters.environmentName }}.json"
+                      -WorkspaceName "${{ parameters.workspaceName }}"
+                      -SubscriptionId "${{ parameters.subscriptionId }}"
+                      -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageDfsEndpoint)"
+                    addSpnToEnvironment: true
+
+                - task: PowerShell@2
+                  displayName: Run Invoke-SynapseSmokeTests.ps1
+                  inputs:
+                    targetType: filePath
+                    filePath: $(Build.SourcesDirectory)/scripts/Invoke-SynapseSmokeTests.ps1
+                    arguments: -TestDefinitionsPath "$(Build.SourcesDirectory)/tests/fixtures/smoke-tests.sample.json"
+                    pwsh: true

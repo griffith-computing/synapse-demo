@@ -1,0 +1,102 @@
+##
+# Build-once, promote-everywhere deployment pipeline for the Synapse PoC
+# infra (Bicep) templates.
+#
+# Stage "Package" builds a single immutable, versioned release artifact
+# from infra/ (scripts/New-SynapseReleasePackage.ps1). The SAME artifact
+# is then promoted through Dev -> Test -> Prod (no rebuild) via the
+# shared templates/deploy-stage.yml template, which applies each
+# environment's approvals/exclusive-lock checks (configured on the Azure
+# DevOps Environment resources named "dev", "test", "prod") and
+# OIDC/workload identity federation sign-in.
+#
+# synapse/ artifacts (pipelines/datasets/notebooks/SQL scripts) and their
+# per-environment parameter overrides (config/<env>.json) are packaged
+# alongside infra/ into the same immutable release artifact and published
+# to the target workspace via scripts/Publish-SynapseArtifacts.ps1 inside
+# templates/deploy-stage.yml, after the infra (Bicep) deployment completes
+# for that environment (artifact typeProperties reference infra outputs
+# such as the storage account's dfs endpoint, so infra must deploy first).
+##
+trigger:
+  branches:
+    include:
+      - main
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - template: templates/variables.yml
+
+stages:
+  - stage: Package
+    displayName: Build immutable infra release package
+    jobs:
+      - job: Package
+        displayName: Package infra release
+        steps:
+          - checkout: self
+
+          - pwsh: |
+              $shortSha = "$(Build.SourceVersion)".Substring(0,7)
+              $version = "$(Build.BuildId)-$shortSha"
+              Write-Host "##vso[task.setvariable variable=releaseVersion;isOutput=true]$version"
+            name: meta
+            displayName: Compute release version
+
+          - task: PowerShell@2
+            displayName: Run New-SynapseReleasePackage.ps1
+            inputs:
+              targetType: filePath
+              filePath: $(Build.SourcesDirectory)/scripts/New-SynapseReleasePackage.ps1
+              arguments: >-
+                -SourcePaths "$(Build.SourcesDirectory)/infra,$(Build.SourcesDirectory)/synapse,$(Build.SourcesDirectory)/config"
+                -OutputDirectory "$(Build.ArtifactStagingDirectory)"
+                -Version "$(meta.releaseVersion)"
+              pwsh: true
+
+          - publish: $(Build.ArtifactStagingDirectory)
+            artifact: $(releaseArtifactName)
+            displayName: Publish immutable infra release artifact
+
+  - template: templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Dev
+      displayName: Deploy - dev
+      environmentName: dev
+      serviceConnection: $(serviceConnection.dev)
+      resourceGroupName: $(resourceGroup.dev)
+      workspaceName: $(workspaceName.dev)
+      subscriptionId: $(subscriptionId.dev)
+      artifactName: $(releaseArtifactName)
+      dependsOn:
+        - Package
+
+  - template: templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Test
+      displayName: Deploy - test
+      environmentName: test
+      serviceConnection: $(serviceConnection.test)
+      resourceGroupName: $(resourceGroup.test)
+      workspaceName: $(workspaceName.test)
+      subscriptionId: $(subscriptionId.test)
+      artifactName: $(releaseArtifactName)
+      dependsOn:
+        - Deploy_Dev
+
+  - template: templates/deploy-stage.yml
+    parameters:
+      stageName: Deploy_Prod
+      displayName: Deploy - prod
+      environmentName: prod
+      serviceConnection: $(serviceConnection.prod)
+      resourceGroupName: $(resourceGroup.prod)
+      workspaceName: $(workspaceName.prod)
+      subscriptionId: $(subscriptionId.prod)
+      artifactName: $(releaseArtifactName)
+      dependsOn:
+        - Deploy_Test

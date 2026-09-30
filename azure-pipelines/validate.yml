@@ -1,0 +1,35 @@
+##
+# Validation (build/lint) pipeline for the Synapse PoC.
+#
+# Runs on pull requests and pushes to main; delegates the offline,
+# credential-free checks to scripts/Test-SynapseRepository.ps1. Mirrors
+# the GitHub Actions validate.yml workflow. Kept deliberately thin.
+##
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: PowerShell@2
+    displayName: Run Test-SynapseRepository.ps1
+    inputs:
+      targetType: filePath
+      filePath: $(Build.SourcesDirectory)/scripts/Test-SynapseRepository.ps1
+      arguments: >-
+        -RepositoryRoot "$(Build.SourcesDirectory)"
+        -RequiredPaths infra,synapse,config,scripts
+        -ConfigFiles config/dev.json,config/test.json,config/prod.json
+        -Offline
+      pwsh: true

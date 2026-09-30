@@ -1,0 +1,15 @@
+{
+  "Microsoft.Synapse/workspaces/linkedservices": {
+    "*": {
+      "properties": {
+        "typeProperties": {
+          "url": "="
+        }
+      }
+    }
+  },
+  "Microsoft.Synapse/workspaces/pipelines": {},
+  "Microsoft.Synapse/workspaces/datasets": {},
+  "Microsoft.Synapse/workspaces/dataflows": {},
+  "Microsoft.Synapse/workspaces/sqlscripts": {}
+}

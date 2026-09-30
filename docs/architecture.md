@@ -1,0 +1,124 @@
+# Architecture
+
+## Overview
+
+This PoC deploys an Azure Synapse Analytics workspace and its supporting resources using
+Infrastructure-as-Code (IaC), with a CI/CD layer that can run on **either** GitHub Actions or
+Azure DevOps Pipelines against the same `infra/`, `synapse/`, and `config/` sources. The two
+pipeline implementations are kept functionally equivalent so a customer can adopt whichever
+platform they already standardize on.
+
+```
+                 ┌─────────────────────────────────────────────────────┐
+                 │                 Source control (this repo)         │
+                 │  infra/  synapse/  config/  scripts/                │
+                 │  .github/workflows/        azure-pipelines/         │
+                 └───────────────┬───────────────────┬─────────────────┘
+                                 │                     │
+                     GitHub Actions OIDC        Azure DevOps OIDC
+                     (workload identity)        (workload identity)
+                                 │                     │
+                                 ▼                     ▼
+                     ┌───────────────────────────────────────┐
+                     │        Azure AD App Registration        │
+                     │  (federated credential, no client secret)│
+                     └───────────────────┬───────────────────┘
+                                         │ least-privilege role assignment
+                                         ▼
+     ┌───────────────────────────────────────────────────────────────────┐
+     │                         Target Resource Group                     │
+     │                                                                   │
+     │   ┌───────────────────┐   ┌───────────────────┐   ┌─────────────┐ │
+     │   │ Synapse Workspace  │──▶│ ADLS Gen2 (primary)│  │ Key Vault    │ │
+     │   │ (Spark + SQL pools)│   │  filesystem store   │  │ (secrets/certs)│
+     │   └─────────┬─────────┘   └───────────────────┘   └─────────────┘ │
+     │             │                                                     │
+     │             ▼                                                     │
+     │   ┌───────────────────┐   ┌───────────────────┐                   │
+     │   │ Managed VNet /     │   │ Log Analytics /    │                   │
+     │   │ Managed Private    │   │ Diagnostic Settings│                   │
+     │   │ Endpoints (opt-in) │   └───────────────────┘                   │
+     │   └───────────────────┘                                           │
+     └───────────────────────────────────────────────────────────────────┘
+```
+
+## Components
+
+| Component | Purpose | Source |
+|---|---|---|
+| Synapse workspace | Analytics compute (serverless SQL, dedicated SQL pool optional, Spark pools) | `infra/` |
+| ADLS Gen2 storage account | Primary workspace filesystem + landing zone for demo datasets | `infra/` |
+| Key Vault | Secrets/connection strings referenced by Synapse linked services | `infra/` |
+| RBAC role assignments | Scoped, least-privilege grants for the deployment identity and workspace managed identity | `infra/` |
+| Synapse artifacts | SQL scripts, notebooks, pipelines, linked services, datasets | `synapse/` |
+| Environment parameters | Per-environment naming, sizing, and feature toggles | `config/` |
+| Pipelines | Build → validate → deploy → (promote) workflow, duplicated for both platforms | `.github/workflows/`, `azure-pipelines/` |
+| Validation/cleanup helpers | Offline template validation, smoke checks, teardown | `scripts/` |
+
+## Identity and RBAC model
+
+### Workload identity federation
+
+Both pipelines authenticate to Azure **without stored client secrets**:
+
+- **GitHub Actions**: uses OpenID Connect (OIDC) to request a short-lived token from GitHub's
+  token issuer, exchanged for an Azure AD access token via a **federated credential** configured
+  on the App Registration (subject matches `repo:<org>/<repo>:environment:<env>` or
+  `repo:<org>/<repo>:ref:refs/heads/<branch>`, scoped per environment).
+- **Azure DevOps**: uses an **Azure Resource Manager service connection configured for workload
+  identity federation** (the ADO-native equivalent of OIDC), which similarly avoids storing a
+  client secret in the service connection.
+
+Both approaches map to the *same* Azure AD App Registration pattern (one per environment is
+recommended) so the RBAC story below applies identically.
+
+### Least-privilege RBAC
+
+- The deployment identity (App Registration / service principal) is granted **Contributor scoped
+  to the target resource group only** — never subscription-level Owner/Contributor.
+- Where the deployment only needs to deploy specific resource types, a **custom role** restricted
+  to the required `Microsoft.Synapse/*`, `Microsoft.Storage/*`, `Microsoft.KeyVault/*`, and
+  `Microsoft.Authorization/roleAssignments/write` (needed only if the pipeline itself assigns
+  RBAC) actions is preferred over built-in Contributor. See
+  [customer-prerequisites.md](customer-prerequisites.md#least-privilege-rbac-inputs) for the
+  exact role list requested from the customer.
+- The **Synapse workspace's system-assigned managed identity** is separately granted narrow data
+  plane roles (e.g. `Storage Blob Data Contributor` on only the workspace's own filesystem), not
+  on the whole storage account estate.
+- Break-glass/interactive access (customer admins) is expected to use **Azure AD PIM-eligible**
+  role assignments rather than standing Owner access; this PoC does not configure PIM itself but
+  is compatible with it.
+
+## Environment topology and configuration
+
+- Environments are modeled as parameter sets in `config/` (e.g. `dev.json`, `test.json`,
+  `prod.json`), not as separate repositories or branches.
+- Each pipeline run takes an environment name as input, resolves the matching `config/<env>.json`,
+  and deploys to the resource group/naming convention defined there.
+- GitHub Actions maps environments to **GitHub Environments** (enabling required reviewers and
+  environment-scoped federated credentials); Azure DevOps maps them to **Environments** with
+  approvals/checks configured on the corresponding stage.
+- See [deployment-runbook.md](deployment-runbook.md#environment-configuration) for the concrete
+  file schema and [deployment-runbook.md](deployment-runbook.md#promotion-across-environments) for
+  how a build is promoted dev → test → prod.
+
+## Private networking extension points
+
+This PoC is deliberately deployed with **public network access enabled** for demo simplicity (see
+[demo-script.md](demo-script.md#poc-shortcuts-vs-production-hardening)). The architecture leaves
+clear extension points for customers who require private networking:
+
+- **Managed VNet for Synapse**: `infra/` parameters include a toggle to enable Synapse's managed
+  VNet and managed private endpoints to storage/Key Vault; disabled by default in the PoC config.
+- **Private endpoints**: the storage account and Key Vault modules accept an optional private
+  endpoint subnet/resource ID; when omitted, public network access is used.
+- **Self-hosted integration runtime**: for on-premises or private source connectivity, the
+  `synapse/` linked service definitions are structured so a self-hosted IR can be substituted for
+  the Azure IR without changing pipeline/dataset definitions.
+- **Pipeline agents**: GitHub Actions self-hosted runners or Azure DevOps self-hosted agents (or
+  Microsoft-hosted agents with a private-link-enabled service connection) are required if the
+  target resources are fully private, since Microsoft/GitHub-hosted agents need network line of
+  sight to deploy. This is called out explicitly in the runbook troubleshooting section.
+
+Enabling any of the above is out of scope for the PoC deployment itself but does not require
+restructuring the repository layout.

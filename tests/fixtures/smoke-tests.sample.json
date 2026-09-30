@@ -1,0 +1,20 @@
+[
+  {
+    "Name": "SamplePipelineExists",
+    "Type": "AzCommand",
+    "Command": ["synapse", "pipeline", "show", "--workspace-name", "synws", "--name", "sample-pipeline"],
+    "Mutating": false
+  },
+  {
+    "Name": "SampleTriggerRun",
+    "Type": "AzCommand",
+    "Command": ["synapse", "pipeline", "create-run", "--workspace-name", "synws", "--name", "sample-pipeline"],
+    "Mutating": true
+  },
+  {
+    "Name": "WorkspaceEndpointReachable",
+    "Type": "HttpCheck",
+    "Url": "https://synws.dev.azuresynapse.net",
+    "Mutating": false
+  }
+]

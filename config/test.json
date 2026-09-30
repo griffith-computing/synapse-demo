@@ -1,0 +1,14 @@
+{
+  "environmentName": "test",
+  "tags": {
+    "environment": "test",
+    "workload": "synapse-poc"
+  },
+  "synapseArtifacts": {
+    "description": "Non-secret override values applied when deploying synapse/ artifacts to this environment. These are consumed together with synapse/template-parameters-definition.json by the workspace-artifact deployment tooling (e.g. the Azure/Synapse-workspace-deployment action's OverrideArmParameters, or an equivalent deploy script) to replace the authoring-time placeholders committed in synapse/**.",
+    "parameters": {
+      "LS_AdlsGen2_ManagedIdentity_properties_typeProperties_url": "{{STORAGE_ACCOUNT_DFS_ENDPOINT}}"
+    },
+    "notes": "{{STORAGE_ACCOUNT_DFS_ENDPOINT}} is a deploy-time placeholder, not a literal value: infra/main.bicep derives the storage account name from uniqueString(resourceGroup().id, environmentName), so the real dfs endpoint is only known after infra deploys. The deploy pipeline must resolve this token from the infra deployment's storageAccountDfsEndpoint output before deploying synapse/ artifacts."
+  }
+}

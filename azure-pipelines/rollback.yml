@@ -1,0 +1,99 @@
+##
+# Manual rollback pipeline: redeploys a previously published immutable
+# infra release package from a prior run of the Deploy pipeline to a
+# chosen environment, without rebuilding. Delegates to the shared
+# templates/deploy-stage.yml template with isRollback=true so
+# scripts/Invoke-SynapseRollback.ps1 verifies/selects the package before
+# scripts/Deploy-SynapseWorkspace.ps1 redeploys it.
+#
+# Run this pipeline manually (Run pipeline) and supply:
+#   - targetEnvironment: dev | test | prod
+#   - sourceRunId: the Azure DevOps run/build ID of the Deploy pipeline
+#     run that published the artifact you want to roll back to
+#   - packageVersion: the version encoded in that artifact (e.g.
+#     12345-abc1234, matching the Build.BuildId-shortSha value computed
+#     by deploy.yml's Package stage for that run)
+#
+# ASSUMPTION: the Deploy pipeline (azure-pipelines/deploy.yml) is
+# registered in this Azure DevOps project as a pipeline named
+# "Synapse-Deploy" (see deployPipelineName variable below). Update it if
+# the actual registered pipeline name differs.
+##
+trigger: none
+pr: none
+
+parameters:
+  - name: targetEnvironment
+    displayName: Environment to roll back
+    type: string
+    default: dev
+    values:
+      - dev
+      - test
+      - prod
+  - name: sourceRunId
+    displayName: Deploy pipeline run ID to roll back to
+    type: string
+  - name: packageVersion
+    displayName: Package version to roll back to (e.g. 12345-abc1234)
+    type: string
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - template: templates/variables.yml
+  - name: deployPipelineName
+    value: 'Synapse-Deploy'
+
+stages:
+  - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+      - template: templates/deploy-stage.yml
+        parameters:
+          stageName: Rollback_Dev
+          displayName: Rollback - dev
+          environmentName: dev
+          serviceConnection: $(serviceConnection.dev)
+          resourceGroupName: $(resourceGroup.dev)
+          workspaceName: $(workspaceName.dev)
+          subscriptionId: $(subscriptionId.dev)
+          artifactName: $(releaseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          isRollback: true
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(deployPipelineName)
+
+  - ${{ if eq(parameters.targetEnvironment, 'test') }}:
+      - template: templates/deploy-stage.yml
+        parameters:
+          stageName: Rollback_Test
+          displayName: Rollback - test
+          environmentName: test
+          serviceConnection: $(serviceConnection.test)
+          resourceGroupName: $(resourceGroup.test)
+          workspaceName: $(workspaceName.test)
+          subscriptionId: $(subscriptionId.test)
+          artifactName: $(releaseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          isRollback: true
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(deployPipelineName)
+
+  - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+      - template: templates/deploy-stage.yml
+        parameters:
+          stageName: Rollback_Prod
+          displayName: Rollback - prod
+          environmentName: prod
+          serviceConnection: $(serviceConnection.prod)
+          resourceGroupName: $(resourceGroup.prod)
+          workspaceName: $(workspaceName.prod)
+          subscriptionId: $(subscriptionId.prod)
+          artifactName: $(releaseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          isRollback: true
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(deployPipelineName)

@@ -1,0 +1,33 @@
+using '../main.bicep'
+
+// SANITIZED EXAMPLE - copy to prod.bicepparam and adjust values for your
+// subscription/tenant before use. Contains no secrets or real identifiers.
+// Replace the placeholder Log Analytics workspace resource ID with a real
+// existing workspace, or leave deployDiagnostics = false if none is ready.
+//
+// Deploy (after copying and editing):
+//   $env:SYNAPSE_SQL_ADMIN_PASSWORD = '<your-password>'
+//   az deployment group create -g <rg-name> -f infra/main.bicep -p infra/parameters/prod.bicepparam
+param environmentName = 'prod'
+param namePrefix = 'syn'
+param location = 'eastus2'
+
+// Production should be hardened behind private endpoints; public access is
+// disabled here by default. Enable only temporarily if required, then revert.
+param publicNetworkAccess = 'Disabled'
+
+param sqlAdministratorLogin = 'synapseadmin'
+param sqlAdministratorLoginPassword = readEnvironmentVariable('SYNAPSE_SQL_ADMIN_PASSWORD')
+
+param deployKeyVault = true
+param deploySparkPool = true
+param sparkPoolNodeSize = 'Medium'
+param deployDiagnostics = true
+param logAnalyticsWorkspaceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-rg/providers/Microsoft.OperationalInsights/workspaces/example-law'
+param managedVirtualNetworkEnabled = true
+
+param tags = {
+  environment: 'prod'
+  workload: 'synapse-poc'
+  managedBy: 'bicep'
+}
