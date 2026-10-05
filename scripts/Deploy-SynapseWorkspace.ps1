@@ -112,12 +112,16 @@ try {
     # -AdditionalParameters.
     #
     # az requires parameter-file + inline overrides to be passed via a
-    # SINGLE --parameters argument (repeating --parameters is only valid
-    # for stacking multiple ARM JSON parameter files, and is rejected when
-    # a .bicepparam file is involved) - so everything is combined below
-    # into one --parameters invocation: "@file" followed by any
-    # "key=value" overrides.
-    $paramOverrides = @("@$TemplateParametersFile")
+    # SINGLE --parameters argument. ARM JSON parameter files use "@file",
+    # while .bicepparam files must be passed as a direct path; prefixing a
+    # Bicep parameter file with "@" makes az parse its `using` declaration
+    # as though it were a template parameter.
+    $parameterFileArgument = if ([System.IO.Path]::GetExtension($TemplateParametersFile) -ieq '.bicepparam') {
+        $TemplateParametersFile
+    } else {
+        "@$TemplateParametersFile"
+    }
+    $paramOverrides = @($parameterFileArgument)
     foreach ($override in $AdditionalParameters) {
         if ($override -notmatch '^[^=\s]+=.+$') {
             throw "AdditionalParameters entries must be in 'key=value' form, got: '$override'"

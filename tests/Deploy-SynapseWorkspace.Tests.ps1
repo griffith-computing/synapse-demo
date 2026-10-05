@@ -50,6 +50,21 @@ Describe 'Deploy-SynapseWorkspace.ps1' {
         $result.StdOut | Should Match ([regex]::Escape("--parameters @$paramsFile environmentName=dev"))
     }
 
+    It 'passes Bicep parameter files without ARM JSON at-file syntax' {
+        $bicepParamsFile = Join-Path $sandbox 'dev.bicepparam'
+        "using '../main.bicep'`nparam environmentName = 'dev'" | Set-Content -LiteralPath $bicepParamsFile
+        $result = Invoke-ScriptUnderTest -ScriptName 'Deploy-SynapseWorkspace.ps1' -Parameters @{
+            ResourceGroupName      = 'rg-synapse-dev'
+            WorkspaceName          = 'synws'
+            TemplateFile           = $templateFile
+            TemplateParametersFile = $bicepParamsFile
+            Offline                = $true
+        }
+        $result.ExitCode | Should Be 0
+        $result.StdOut | Should Match ([regex]::Escape("--parameters $bicepParamsFile"))
+        $result.StdOut | Should Not Match ([regex]::Escape("--parameters @$bicepParamsFile"))
+    }
+
     It 'fails explicitly when TemplateFile is missing' {
         $result = Invoke-ScriptUnderTest -ScriptName 'Deploy-SynapseWorkspace.ps1' -Parameters @{
             ResourceGroupName      = 'rg-synapse-dev'
