@@ -1,0 +1,77 @@
+##
+# Manual artifact rollback pipeline. Re-publishes a prior immutable Synapse
+# artifact package to one environment without invoking Bicep.
+##
+trigger: none
+pr: none
+
+parameters:
+  - name: targetEnvironment
+    displayName: Environment to roll back
+    type: string
+    default: dev
+    values:
+      - dev
+      - test
+      - prod
+  - name: sourceRunId
+    displayName: Publish Artifacts pipeline run ID to roll back to
+    type: string
+  - name: packageVersion
+    displayName: Package version to roll back to (e.g. 12345-abc1234)
+    type: string
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - template: templates/variables.yml
+
+stages:
+  - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
+      - template: templates/publish-artifacts-stage.yml
+        parameters:
+          stageName: Rollback_Artifacts_Dev
+          displayName: Rollback artifacts - dev
+          environmentName: dev
+          serviceConnection: $(serviceConnection.dev)
+          resourceGroupName: $(resourceGroup.dev)
+          workspaceName: $(workspaceName.dev)
+          subscriptionId: $(subscriptionId.dev)
+          artifactName: $(synapseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(synapseArtifactPipelineId)
+
+  - ${{ if eq(parameters.targetEnvironment, 'test') }}:
+      - template: templates/publish-artifacts-stage.yml
+        parameters:
+          stageName: Rollback_Artifacts_Test
+          displayName: Rollback artifacts - test
+          environmentName: test
+          serviceConnection: $(serviceConnection.test)
+          resourceGroupName: $(resourceGroup.test)
+          workspaceName: $(workspaceName.test)
+          subscriptionId: $(subscriptionId.test)
+          artifactName: $(synapseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(synapseArtifactPipelineId)
+
+  - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
+      - template: templates/publish-artifacts-stage.yml
+        parameters:
+          stageName: Rollback_Artifacts_Prod
+          displayName: Rollback artifacts - prod
+          environmentName: prod
+          serviceConnection: $(serviceConnection.prod)
+          resourceGroupName: $(resourceGroup.prod)
+          workspaceName: $(workspaceName.prod)
+          subscriptionId: $(subscriptionId.prod)
+          artifactName: $(synapseArtifactName)
+          packageVersion: ${{ parameters.packageVersion }}
+          downloadMode: specific
+          sourceBuildId: ${{ parameters.sourceRunId }}
+          pipelineResourceAlias: $(synapseArtifactPipelineId)

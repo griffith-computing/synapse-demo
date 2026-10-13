@@ -1,0 +1,142 @@
+##
+# Reusable publication workflow for one existing Synapse environment.
+##
+name: Publish Synapse artifacts to environment (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target environment name (dev, test, prod)
+        required: true
+        type: string
+      artifact-name:
+        description: Immutable Synapse artifact package name
+        required: true
+        type: string
+      package-version:
+        description: Expected version encoded in the package manifest
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish artifacts (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download immutable Synapse artifact package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: package
+
+      - name: Select and expand artifact package
+        id: package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path package -Filter *.zip | Select-Object -First 1
+          $manifest = Get-ChildItem -Path package -Filter *.manifest.json | Select-Object -First 1
+          if (-not $zip) { throw "No .zip package found in downloaded artifact." }
+          if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
+
+          $actualVersion = (Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json).Version
+          if ($actualVersion -ne '${{ inputs.package-version }}') {
+            throw "Downloaded package version '$actualVersion' does not match requested version '${{ inputs.package-version }}'."
+          }
+
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath package-extracted -Force
+          echo "manifest-path=$($manifest.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Verify artifact package integrity
+        shell: pwsh
+        run: |
+          ./scripts/Test-SynapseRepository.ps1 `
+            -RepositoryRoot "${{ github.workspace }}" `
+            -ArtifactManifestPath "${{ steps.package.outputs.manifest-path }}" `
+            -ArtifactBasePath "${{ github.workspace }}/package-extracted" `
+            -Offline
+
+      - name: Azure login (OIDC / workload identity federation)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve workspace publication endpoints
+        id: workspace
+        shell: pwsh
+        run: |
+          $workspaceJson = az synapse workspace show `
+            --name "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            --subscription "${{ vars.AZURE_SUBSCRIPTION_ID }}" `
+            --output json
+          if ($LASTEXITCODE -ne 0 -or -not $workspaceJson) {
+            throw "Synapse workspace '${{ vars.SYNAPSE_WORKSPACE_NAME }}' was not found. Deploy infrastructure before publishing artifacts."
+          }
+
+          $workspace = $workspaceJson | ConvertFrom-Json
+          $dfsEndpoint = $workspace.defaultDataLakeStorage.accountUrl
+          $webEndpoint = $workspace.connectivityEndpoints.web
+          if (-not $dfsEndpoint) { throw "Workspace defaultDataLakeStorage.accountUrl is empty." }
+          if (-not $webEndpoint) { $webEndpoint = "https://${{ vars.SYNAPSE_WORKSPACE_NAME }}.dev.azuresynapse.net" }
+
+          echo "storage-dfs-endpoint=$dfsEndpoint" >> $env:GITHUB_OUTPUT
+          echo "storage-account-name=$(([Uri]$dfsEndpoint).Host.Split('.')[0])" >> $env:GITHUB_OUTPUT
+          echo "web-endpoint=$webEndpoint" >> $env:GITHUB_OUTPUT
+
+      - name: Seed raw sample data
+        shell: pwsh
+        run: |
+          az storage fs file upload `
+            --account-name "${{ steps.workspace.outputs.storage-account-name }}" `
+            --file-system raw `
+            --path "sample/sample_customers.csv" `
+            --source "${{ github.workspace }}/package-extracted/sample/raw/sample_customers.csv" `
+            --auth-mode login `
+            --overwrite true `
+            --only-show-errors
+
+      - name: Publish Synapse workspace artifacts
+        shell: pwsh
+        run: |
+          ./scripts/Publish-SynapseArtifacts.ps1 `
+            -ArtifactsRoot "${{ github.workspace }}/package-extracted/synapse" `
+            -ConfigFile "${{ github.workspace }}/package-extracted/config/${{ inputs.environment }}.json" `
+            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -SubscriptionId "${{ vars.AZURE_SUBSCRIPTION_ID }}" `
+            -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=${{ steps.workspace.outputs.storage-dfs-endpoint }}"
+
+      - name: Resolve smoke tests
+        shell: pwsh
+        run: |
+          $definitions = Get-Content "${{ github.workspace }}/tests/fixtures/smoke-tests.sample.json" -Raw | ConvertFrom-Json
+          foreach ($definition in $definitions) {
+            if ($definition.Type -eq 'AzCommand') {
+              for ($index = 0; $index -lt $definition.Command.Count; $index++) {
+                if ($definition.Command[$index] -eq 'synws') { $definition.Command[$index] = '${{ vars.SYNAPSE_WORKSPACE_NAME }}' }
+                if ($definition.Command[$index] -eq 'sample-pipeline') { $definition.Command[$index] = 'PL_CopyRawToCurated' }
+              }
+            }
+            if ($definition.Type -eq 'HttpCheck') { $definition.Url = '${{ steps.workspace.outputs.web-endpoint }}' }
+          }
+          $definitions | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath "${{ runner.temp }}/synapse-smoke-tests.json" -Encoding UTF8
+
+      - name: Run resolved Synapse smoke tests
+        shell: pwsh
+        run: |
+          ./scripts/Invoke-SynapseSmokeTests.ps1 `
+            -TestDefinitionsPath "${{ runner.temp }}/synapse-smoke-tests.json"

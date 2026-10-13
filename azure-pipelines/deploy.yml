@@ -10,18 +10,23 @@
 # DevOps Environment resources named "dev", "test", "prod") and
 # OIDC/workload identity federation sign-in.
 #
-# synapse/ artifacts (pipelines/datasets/notebooks/SQL scripts) and their
-# per-environment parameter overrides (config/<env>.json) are packaged
-# alongside infra/ into the same immutable release artifact and published
-# to the target workspace via scripts/Publish-SynapseArtifacts.ps1 inside
-# templates/deploy-stage.yml, after the infra (Bicep) deployment completes
-# for that environment (artifact typeProperties reference infra outputs
-# such as the storage account's dfs endpoint, so infra must deploy first).
+# Synapse workspace artifacts are packaged and promoted independently by
+# azure-pipelines/publish-artifacts.yml after infrastructure exists.
 ##
 trigger:
   branches:
     include:
       - main
+  paths:
+    include:
+      - infra/**
+      - azure-pipelines/deploy.yml
+      - azure-pipelines/templates/deploy-stage.yml
+      - azure-pipelines/templates/variables.yml
+      - scripts/Common.psm1
+      - scripts/Deploy-SynapseWorkspace.ps1
+      - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Test-SynapseRepository.ps1
 
 pr: none
 
@@ -53,9 +58,10 @@ stages:
               targetType: filePath
               filePath: $(Build.SourcesDirectory)/scripts/New-SynapseReleasePackage.ps1
               arguments: >-
-                -SourcePaths "$(Build.SourcesDirectory)/infra,$(Build.SourcesDirectory)/synapse,$(Build.SourcesDirectory)/config"
+                -SourcePaths "$(Build.SourcesDirectory)/infra"
                 -OutputDirectory "$(Build.ArtifactStagingDirectory)"
                 -Version "$(meta.releaseVersion)"
+                -PackageName "synapse-infra-release"
               pwsh: true
 
           - publish: $(Build.ArtifactStagingDirectory)

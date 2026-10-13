@@ -61,6 +61,17 @@ resource filesystem 'Microsoft.Storage/storageAccounts/blobServices/containers@2
   }
 }
 
+resource sampleFilesystems 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = [for sampleFilesystemName in [
+  'raw'
+  'curated'
+]: {
+  parent: blobServices
+  name: sampleFilesystemName
+  properties: {
+    publicAccess: 'None'
+  }
+}]
+
 @description('Resource ID of the storage account.')
 output storageAccountId string = storageAccount.id
 

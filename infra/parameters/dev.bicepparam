@@ -14,7 +14,7 @@ param location = 'eastus2'
 param publicNetworkAccess = 'Enabled'
 
 param sqlAdministratorLogin = 'synapseadmin'
-param sqlAdministratorLoginPassword = readEnvironmentVariable('SYNAPSE_SQL_ADMIN_PASSWORD')
+param sqlAdministratorLoginPassword = readEnvironmentVariable('SYNAPSE_SQL_ADMIN_PASSWORD', 'validation-only-not-for-deployment')
 
 param deployKeyVault = true
 param deploySparkPool = false

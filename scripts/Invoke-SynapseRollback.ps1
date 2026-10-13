@@ -36,6 +36,9 @@ param(
     [string]$PackageDirectory,
 
     [Parameter()]
+    [string]$ArtifactBasePath,
+
+    [Parameter()]
     [string]$TargetVersion,
 
     [Parameter()]
@@ -69,6 +72,13 @@ try {
         throw "PackageDirectory not found: $PackageDirectory"
     }
     $PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).Path
+    if (-not $ArtifactBasePath) {
+        $ArtifactBasePath = $PackageDirectory
+    }
+    if (-not (Test-Path -LiteralPath $ArtifactBasePath -PathType Container)) {
+        throw "ArtifactBasePath not found: $ArtifactBasePath"
+    }
+    $ArtifactBasePath = (Resolve-Path -LiteralPath $ArtifactBasePath).Path
 
     $manifestFiles = @(Get-ChildItem -LiteralPath $PackageDirectory -Filter '*.manifest.json' -File -ErrorAction SilentlyContinue)
     if (-not $manifestFiles -or $manifestFiles.Count -eq 0) {
@@ -114,7 +124,7 @@ try {
     $checksumsVerified = $null
     $verificationDetail = $null
     if ($VerifyChecksums) {
-        $verificationDetail = Test-SynapseFileManifest -ManifestPath $selected.ManifestPath -BasePath $PackageDirectory
+        $verificationDetail = Test-SynapseFileManifest -ManifestPath $selected.ManifestPath -BasePath $ArtifactBasePath
         $checksumsVerified = $verificationDetail.IsValid
         if ($checksumsVerified) {
             Write-SynapseLog -LogPath $LogPath -Level Success -Message "Checksum verification passed for rollback candidate '$($selected.Version)'."

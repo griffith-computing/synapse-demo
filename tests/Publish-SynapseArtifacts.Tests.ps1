@@ -69,6 +69,28 @@ Describe 'Publish-SynapseArtifacts.ps1' {
         $result.StdOut | Should Match 'Unresolved placeholder token'
     }
 
+    It 'fails explicitly when an artifact JSON token has no matching runtime value' {
+        $artifactTokenRoot = Join-Path $sandbox 'artifact-token-root'
+        $sqlScriptDir = Join-Path $artifactTokenRoot 'sqlscript'
+        New-Item -ItemType Directory -Path $sqlScriptDir -Force | Out-Null
+        @{
+            name       = 'SQL_Test'
+            type       = 'Microsoft.Synapse/workspaces/sqlscripts'
+            properties = @{ content = @{ query = "SELECT * FROM OPENROWSET(BULK '{{STORAGE_ACCOUNT_DFS_ENDPOINT}}/curated/test.csv')" } }
+        } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $sqlScriptDir 'SQL_Test.json') -Encoding UTF8
+        $emptyConfig = Join-Path $sandbox 'empty-config.json'
+        '{"environmentName":"dev","synapseArtifacts":{"parameters":{}}}' | Set-Content -LiteralPath $emptyConfig -Encoding UTF8
+
+        $result = Invoke-ScriptUnderTest -ScriptName 'Publish-SynapseArtifacts.ps1' -Parameters @{
+            ArtifactsRoot = $artifactTokenRoot
+            ConfigFile    = $emptyConfig
+            WorkspaceName = 'synws'
+            Offline       = $true
+        }
+        $result.ExitCode | Should Be 3
+        $result.StdOut | Should Match 'Unresolved placeholder token'
+    }
+
     It 'fails explicitly when ArtifactsRoot is missing' {
         $result = Invoke-ScriptUnderTest -ScriptName 'Publish-SynapseArtifacts.ps1' -Parameters @{
             ArtifactsRoot = (Join-Path $sandbox 'no-such-folder')

@@ -1,10 +1,11 @@
 ##
-# Manual rollback pipeline: redeploys a previously published immutable
-# infra release package from a prior run of the Deploy pipeline to a
+# Manual infrastructure rollback pipeline: redeploys a previously published
+# immutable infra release package from a prior run of the Deploy pipeline to a
 # chosen environment, without rebuilding. Delegates to the shared
 # templates/deploy-stage.yml template with isRollback=true so
 # scripts/Invoke-SynapseRollback.ps1 verifies/selects the package before
-# scripts/Deploy-SynapseWorkspace.ps1 redeploys it.
+# scripts/Deploy-SynapseWorkspace.ps1 redeploys it. Synapse workspace
+# artifacts are rolled back independently by rollback-artifacts.yml.
 #
 # Run this pipeline manually (Run pipeline) and supply:
 #   - targetEnvironment: dev | test | prod
@@ -14,10 +15,9 @@
 #     12345-abc1234, matching the Build.BuildId-shortSha value computed
 #     by deploy.yml's Package stage for that run)
 #
-# ASSUMPTION: the Deploy pipeline (azure-pipelines/deploy.yml) is
-# registered in this Azure DevOps project as a pipeline named
-# "Synapse-Deploy" (see deployPipelineName variable below). Update it if
-# the actual registered pipeline name differs.
+# ASSUMPTION: the Deploy pipeline (azure-pipelines/deploy.yml) has a numeric
+# pipeline definition ID configured below. Replace the placeholder after
+# registering the pipeline.
 ##
 trigger: none
 pr: none
@@ -43,8 +43,8 @@ pool:
 
 variables:
   - template: templates/variables.yml
-  - name: deployPipelineName
-    value: 'Synapse-Deploy'
+  - name: deployPipelineId
+    value: '0'
 
 stages:
   - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
@@ -62,7 +62,7 @@ stages:
           isRollback: true
           downloadMode: specific
           sourceBuildId: ${{ parameters.sourceRunId }}
-          pipelineResourceAlias: $(deployPipelineName)
+          pipelineResourceAlias: $(deployPipelineId)
 
   - ${{ if eq(parameters.targetEnvironment, 'test') }}:
       - template: templates/deploy-stage.yml
@@ -79,7 +79,7 @@ stages:
           isRollback: true
           downloadMode: specific
           sourceBuildId: ${{ parameters.sourceRunId }}
-          pipelineResourceAlias: $(deployPipelineName)
+          pipelineResourceAlias: $(deployPipelineId)
 
   - ${{ if eq(parameters.targetEnvironment, 'prod') }}:
       - template: templates/deploy-stage.yml
@@ -96,4 +96,4 @@ stages:
           isRollback: true
           downloadMode: specific
           sourceBuildId: ${{ parameters.sourceRunId }}
-          pipelineResourceAlias: $(deployPipelineName)
+          pipelineResourceAlias: $(deployPipelineId)

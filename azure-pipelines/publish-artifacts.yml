@@ -1,0 +1,101 @@
+##
+# Build-once, promote-everywhere pipeline for Synapse workspace artifacts.
+# Infrastructure must already exist; this pipeline never invokes Bicep.
+##
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - synapse/**
+      - config/**
+      - sample/**
+      - azure-pipelines/publish-artifacts.yml
+      - azure-pipelines/templates/publish-artifacts-stage.yml
+      - azure-pipelines/templates/variables.yml
+      - scripts/Common.psm1
+      - scripts/Invoke-SynapseSmokeTests.ps1
+      - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Publish-SynapseArtifacts.ps1
+      - scripts/Test-SynapseRepository.ps1
+      - tests/fixtures/smoke-tests.sample.json
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - template: templates/variables.yml
+
+stages:
+  - stage: Package
+    displayName: Build immutable Synapse artifact package
+    jobs:
+      - job: Package
+        displayName: Package Synapse workspace artifacts
+        steps:
+          - checkout: self
+
+          - pwsh: |
+              $shortSha = "$(Build.SourceVersion)".Substring(0,7)
+              $version = "$(Build.BuildId)-$shortSha"
+              Write-Host "##vso[task.setvariable variable=releaseVersion;isOutput=true]$version"
+            name: meta
+            displayName: Compute artifact version
+
+          - task: PowerShell@2
+            displayName: Package Synapse workspace artifacts
+            inputs:
+              targetType: filePath
+              filePath: $(Build.SourcesDirectory)/scripts/New-SynapseReleasePackage.ps1
+              arguments: >-
+                -SourcePaths "$(Build.SourcesDirectory)/synapse,$(Build.SourcesDirectory)/config,$(Build.SourcesDirectory)/sample"
+                -OutputDirectory "$(Build.ArtifactStagingDirectory)"
+                -Version "$(meta.releaseVersion)"
+                -PackageName "synapse-artifacts"
+              pwsh: true
+
+          - publish: $(Build.ArtifactStagingDirectory)
+            artifact: $(synapseArtifactName)
+            displayName: Publish immutable Synapse artifact package
+
+  - template: templates/publish-artifacts-stage.yml
+    parameters:
+      stageName: Publish_Dev
+      displayName: Publish artifacts - dev
+      environmentName: dev
+      serviceConnection: $(serviceConnection.dev)
+      resourceGroupName: $(resourceGroup.dev)
+      workspaceName: $(workspaceName.dev)
+      subscriptionId: $(subscriptionId.dev)
+      artifactName: $(synapseArtifactName)
+      dependsOn:
+        - Package
+
+  - template: templates/publish-artifacts-stage.yml
+    parameters:
+      stageName: Publish_Test
+      displayName: Publish artifacts - test
+      environmentName: test
+      serviceConnection: $(serviceConnection.test)
+      resourceGroupName: $(resourceGroup.test)
+      workspaceName: $(workspaceName.test)
+      subscriptionId: $(subscriptionId.test)
+      artifactName: $(synapseArtifactName)
+      dependsOn:
+        - Publish_Dev
+
+  - template: templates/publish-artifacts-stage.yml
+    parameters:
+      stageName: Publish_Prod
+      displayName: Publish artifacts - prod
+      environmentName: prod
+      serviceConnection: $(serviceConnection.prod)
+      resourceGroupName: $(resourceGroup.prod)
+      workspaceName: $(workspaceName.prod)
+      subscriptionId: $(subscriptionId.prod)
+      artifactName: $(synapseArtifactName)
+      dependsOn:
+        - Publish_Test

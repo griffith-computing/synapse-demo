@@ -97,6 +97,12 @@ try {
         throw "PostDeploymentScript not found: $PostDeploymentScript"
     }
 
+    $parameterFileText = Get-Content -LiteralPath $TemplateParametersFile -Raw
+    $requiresSqlAdminPassword = $parameterFileText -match 'SYNAPSE_SQL_ADMIN_PASSWORD'
+    if (-not $Offline -and $requiresSqlAdminPassword -and [string]::IsNullOrWhiteSpace($env:SYNAPSE_SQL_ADMIN_PASSWORD)) {
+        throw "SYNAPSE_SQL_ADMIN_PASSWORD must be supplied through the process environment for Azure what-if and deployment operations."
+    }
+
     if (-not $DeploymentName) {
         $DeploymentName = "synapse-$WorkspaceName-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
     }

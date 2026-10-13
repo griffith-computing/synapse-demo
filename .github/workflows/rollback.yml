@@ -1,6 +1,6 @@
 ##
-# Manual rollback workflow: redeploys a previously published immutable
-# infra release package (selected by prior workflow run + artifact name)
+# Manual infrastructure rollback workflow: redeploys a previously published
+# immutable infra release package (selected by prior workflow run + artifact name)
 # to a chosen environment, without rebuilding. Delegates to the reusable
 # deploy-environment.yml workflow (same OIDC login, approvals, smoke
 # test path) with is-rollback=true, so
@@ -9,7 +9,8 @@
 #
 # Per docs/deployment-runbook.md "Rollback semantics and limits": this is
 # a forward redeploy of a prior known-good infra template + parameters,
-# not a transactional/data-plane rollback.
+# not a transactional/data-plane rollback. Synapse workspace artifacts are
+# rolled back independently by rollback-artifacts.yml.
 #
 # Run this workflow manually and supply:
 #   - environment: dev | test | prod

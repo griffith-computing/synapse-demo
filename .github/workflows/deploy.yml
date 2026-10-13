@@ -8,15 +8,10 @@
 #               environment (no rebuild). Each stage delegates to the
 #               reusable deploy-environment.yml workflow, which applies
 #               that environment's required GitHub Environment approvals,
-#               OIDC login, offline what-if, deploy and smoke test.
+#               OIDC login, authenticated what-if, and deploy.
 #
-# synapse/ artifacts (pipelines/datasets/notebooks/SQL scripts) and their
-# per-environment parameter overrides (config/<env>.json) are packaged
-# alongside infra/ into the same immutable release artifact and published
-# to the target workspace via scripts/Publish-SynapseArtifacts.ps1 inside
-# deploy-environment.yml, after the infra (Bicep) deployment completes for
-# that environment (artifact typeProperties reference infra outputs such
-# as the storage account's dfs endpoint, so infra must deploy first).
+# Synapse workspace artifacts are packaged and promoted independently by
+# publish-artifacts.yml after infrastructure exists.
 #
 # ASSUMPTION: scripts/New-SynapseReleasePackage.ps1 accepts -SourcePaths
 # <path[]> -OutputDirectory <path> -Version <string> and produces a
@@ -30,6 +25,14 @@ name: Deploy
 on:
   push:
     branches: [main]
+    paths:
+      - infra/**
+      - .github/workflows/deploy.yml
+      - .github/workflows/deploy-environment.yml
+      - scripts/Common.psm1
+      - scripts/Deploy-SynapseWorkspace.ps1
+      - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Test-SynapseRepository.ps1
   workflow_dispatch: {}
 
 # Only one promotion pipeline in flight at a time; later pushes queue
@@ -65,9 +68,10 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/New-SynapseReleasePackage.ps1 `
-            -SourcePaths "${{ github.workspace }}/infra,${{ github.workspace }}/synapse,${{ github.workspace }}/config" `
+            -SourcePaths "${{ github.workspace }}/infra" `
             -OutputDirectory "${{ github.workspace }}/dist" `
-            -Version "${{ steps.meta.outputs.version }}"
+            -Version "${{ steps.meta.outputs.version }}" `
+            -PackageName "synapse-infra-release"
 
       - name: Publish immutable artifact
         uses: actions/upload-artifact@v4

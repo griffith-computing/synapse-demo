@@ -1,0 +1,65 @@
+##
+# Manual artifact rollback workflow. Re-publishes a prior immutable Synapse
+# artifact package to one environment without invoking Bicep.
+##
+name: Rollback Synapse Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      source_run_id:
+        description: Run ID of the Publish Synapse Artifacts workflow
+        required: true
+        type: string
+      artifact_name:
+        description: Immutable artifact name (e.g. synapse-artifacts-release-42-abc1234)
+        required: true
+        type: string
+      package_version:
+        description: Version encoded in the package (e.g. 42-abc1234)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  fetch-package:
+    name: Fetch prior Synapse artifact package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download prior immutable artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: package
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Re-publish artifact for rollback job
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-${{ inputs.artifact_name }}
+          path: package/**
+          if-no-files-found: error
+
+  rollback:
+    name: Rollback artifacts (${{ inputs.environment }})
+    needs: fetch-package
+    uses: ./.github/workflows/publish-artifacts-environment.yml
+    with:
+      environment: ${{ inputs.environment }}
+      artifact-name: rollback-${{ inputs.artifact_name }}
+      package-version: ${{ inputs.package_version }}
+    permissions:
+      id-token: write
+      contents: read

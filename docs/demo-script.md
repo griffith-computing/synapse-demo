@@ -46,12 +46,10 @@ Capture answers — they determine which sections below to emphasize or skip.
    - Reference [architecture.md](architecture.md#identity-and-rbac-model) for the full model.
 
 3. **Trigger a deployment** (10–15 min)
-   - Kick off the workflow/pipeline for `dev` (or `test`, if already promoted) live, showing:
-     - Build/lint stage.
-     - Offline validate / what-if output (call out explicitly that this step makes no changes).
-     - Deploy stage authenticating via OIDC/workload identity federation — no secrets visible in
-       logs.
-     - Post-deploy smoke checks passing.
+   - If infrastructure is not present, run the infrastructure workflow/pipeline and show its
+    package, authenticated what-if, OIDC authentication, and Bicep deployment stages.
+   - Run the artifact workflow/pipeline separately and show that it verifies and publishes the
+     `synapse/` and `config/` package without invoking Bicep, followed by resolved smoke checks.
    - If time is limited, show a **previously completed** run instead of a live one, and be explicit
      that this is a recording of a prior live-validated run, not a new live deployment being
      narrated as if unverified.
@@ -61,14 +59,15 @@ Capture answers — they determine which sections below to emphasize or skip.
    - Run the sample artifact and show output, tying it back to the `config/<env>.json` values used.
 
 5. **Promotion (if relevant to discovery answers)** (5 min)
-   - Show how the same commit/artifact promotes from `dev` to `test` via
+  - Show how each immutable package promotes independently from `dev` to `test` via
      [deployment-runbook.md#promotion-across-environments](deployment-runbook.md#promotion-across-environments),
      calling out the approval gate.
 
 6. **Rollback discussion** (5 min)
    - Walk through [deployment-runbook.md#rollback-semantics-and-limits](deployment-runbook.md#rollback-semantics-and-limits)
      verbally rather than performing a live destructive rollback. Be explicit: rollback here means
-     redeploying a known-good commit, and does **not** restore data-plane changes.
+    redeploying a known-good infrastructure package or republishing a known-good artifact package,
+    and does **not** restore data-plane changes.
 
 7. **Q&A and gap discussion** (open-ended)
    - Use the [PoC shortcuts vs production hardening](#poc-shortcuts-vs-production-hardening)

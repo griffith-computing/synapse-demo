@@ -65,6 +65,21 @@ Describe 'Deploy-SynapseWorkspace.ps1' {
         $result.StdOut | Should Not Match ([regex]::Escape("--parameters @$bicepParamsFile"))
     }
 
+    It 'requires the SQL admin password before a live Bicep what-if' {
+        $bicepParamsFile = Join-Path $sandbox 'requires-secret.bicepparam'
+        "using '../main.bicep'`nparam password = readEnvironmentVariable('SYNAPSE_SQL_ADMIN_PASSWORD', 'validation-only-not-for-deployment')" | Set-Content -LiteralPath $bicepParamsFile
+        $result = Invoke-ScriptUnderTest -ScriptName 'Deploy-SynapseWorkspace.ps1' -Parameters @{
+            ResourceGroupName      = 'rg-synapse-dev'
+            WorkspaceName          = 'synws'
+            TemplateFile           = $templateFile
+            TemplateParametersFile = $bicepParamsFile
+            DryRun                 = $true
+        }
+        $result.ExitCode | Should Be 3
+        $result.StdOut | Should Match 'SYNAPSE_SQL_ADMIN_PASSWORD'
+        $result.StdOut | Should Match 'be supplied'
+    }
+
     It 'fails explicitly when TemplateFile is missing' {
         $result = Invoke-ScriptUnderTest -ScriptName 'Deploy-SynapseWorkspace.ps1' -Parameters @{
             ResourceGroupName      = 'rg-synapse-dev'

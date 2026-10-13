@@ -481,7 +481,9 @@ function Test-SynapseFileManifest {
     $missing = @()
 
     foreach ($entry in $manifest.Files) {
-        $fullPath = Join-Path $BasePath ($entry.RelativePath -replace '/', '\')
+        $directorySeparator = [string][System.IO.Path]::DirectorySeparatorChar
+        $relativePath = ([string]$entry.RelativePath).Replace('/', $directorySeparator).Replace('\', $directorySeparator)
+        $fullPath = Join-Path $BasePath $relativePath
         if (-not (Test-Path -LiteralPath $fullPath)) {
             $missing += $entry.RelativePath
             continue

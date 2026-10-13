@@ -124,7 +124,7 @@ function Resolve-SynapseTokenString {
     foreach ($m in $unresolvedMatches) {
         $tokenName = $m.Groups[1].Value
         if (-not $TokenMap.ContainsKey($tokenName)) {
-            throw "Unresolved placeholder token '{{$tokenName}}' found in config parameter value; supply it via -TokenValues '$tokenName=<value>'."
+            throw "Unresolved placeholder token '{{$tokenName}}' found in Synapse artifact configuration; supply it via -TokenValues '$tokenName=<value>'."
         }
         # Literal (non-regex) replace so token values containing regex
         # metacharacters (e.g. URLs with dots) are substituted verbatim.
@@ -200,7 +200,9 @@ try {
 
             $artifactFiles = Get-ChildItem -LiteralPath $folderPath -Filter '*.json' -File | Sort-Object Name
             foreach ($file in $artifactFiles) {
-                $artifact = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+                $artifactText = Get-Content -LiteralPath $file.FullName -Raw
+                $artifactText = Resolve-SynapseTokenString -Text $artifactText -TokenMap $tokenMap
+                $artifact = $artifactText | ConvertFrom-Json
                 $artifactName = $artifact.name
                 if (-not $artifactName) {
                     throw "Artifact file '$($file.FullName)' has no top-level 'name' property."

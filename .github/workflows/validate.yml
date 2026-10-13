@@ -7,7 +7,7 @@
 # confirms config/*.json parses and contains no obvious hard-coded
 # secrets, and (when an artifact manifest is supplied, e.g. by
 # deploy.yml) verifies package checksums. No Azure sign-in is performed
-# here - see deploy.yml for the offline what-if + live deploy stages.
+# here - see deploy.yml for the authenticated what-if + live deploy stages.
 #
 # ASSUMPTION: scripts/Test-SynapseRepository.ps1 is the validation entry
 # point owned by the scripts/ workstream, with the parameters used below

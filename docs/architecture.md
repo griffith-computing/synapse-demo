@@ -51,9 +51,26 @@ platform they already standardize on.
 | Key Vault | Secrets/connection strings referenced by Synapse linked services | `infra/` |
 | RBAC role assignments | Scoped, least-privilege grants for the deployment identity and workspace managed identity | `infra/` |
 | Synapse artifacts | SQL scripts, notebooks, pipelines, linked services, datasets | `synapse/` |
-| Environment parameters | Per-environment naming, sizing, and feature toggles | `config/` |
+| Infrastructure parameters | Per-environment Azure naming, sizing, and feature toggles | `infra/parameters/` |
+| Artifact overrides | Per-environment Synapse artifact property overrides | `config/` |
 | Pipelines | Build → validate → deploy → (promote) workflow, duplicated for both platforms | `.github/workflows/`, `azure-pipelines/` |
 | Validation/cleanup helpers | Offline template validation, smoke checks, teardown | `scripts/` |
+
+## Independent release streams
+
+GitHub Actions and Azure DevOps each implement two release streams with separate triggers and
+rollback paths:
+
+| Release stream | Package contents | Trigger | Deployment behavior |
+|---|---|---|---|
+| Infrastructure | `infra/` | Infrastructure and owned orchestration changes | Runs Bicep what-if and deployment; never publishes workspace artifacts |
+| Synapse artifacts | `synapse/`, `config/`, `sample/` | Workspace artifact, configuration, sample-data, and owned publishing changes | Requires an existing workspace; publishes data-plane artifacts without invoking Bicep |
+
+Each stream builds one immutable, checksummed package and promotes that exact package through
+dev, test, and prod. Existing GitHub Environments and Azure DevOps Environments provide approval
+gates and prevent concurrent changes to the same environment. Artifact publication reads the
+workspace's configured ADLS Gen2 endpoint from `defaultDataLakeStorage.accountUrl`, applies the
+matching `config/<env>.json`, and publishes only files extracted from the verified package.
 
 ## Identity and RBAC model
 
@@ -91,10 +108,10 @@ recommended) so the RBAC story below applies identically.
 
 ## Environment topology and configuration
 
-- Environments are modeled as parameter sets in `config/` (e.g. `dev.json`, `test.json`,
-  `prod.json`), not as separate repositories or branches.
-- Each pipeline run takes an environment name as input, resolves the matching `config/<env>.json`,
-  and deploys to the resource group/naming convention defined there.
+- Environments are modeled as Bicep parameter files in `infra/parameters/` and matching Synapse
+  artifact overrides in `config/`, not as separate repositories or branches.
+- Infrastructure deployment selects `infra/parameters/<env>.bicepparam`; artifact publication
+  selects `config/<env>.json` from its independently versioned package.
 - GitHub Actions maps environments to **GitHub Environments** (enabling required reviewers and
   environment-scoped federated credentials); Azure DevOps maps them to **Environments** with
   approvals/checks configured on the corresponding stage.

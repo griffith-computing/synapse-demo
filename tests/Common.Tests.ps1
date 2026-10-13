@@ -96,6 +96,24 @@ Describe 'Common.psm1 - manifest / checksum helpers' {
         $result.IsValid | Should Be $true
     }
 
+    It 'verifies slash-delimited nested paths on the current platform' {
+        $nestedDir = Join-Path $sandbox 'nested'
+        New-Item -ItemType Directory -Path $nestedDir -Force | Out-Null
+        $nestedFile = Join-Path $nestedDir 'item.txt'
+        'nested content' | Set-Content -LiteralPath $nestedFile -NoNewline
+        $manifest = [PSCustomObject]@{
+            Files = @([PSCustomObject]@{
+                RelativePath = 'nested/item.txt'
+                Sha256       = (Get-FileHash -LiteralPath $nestedFile -Algorithm SHA256).Hash
+            })
+        }
+        $manifestPath = Join-Path $sandbox 'nested-manifest.json'
+        $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $manifestPath
+
+        $result = Test-SynapseFileManifest -ManifestPath $manifestPath -BasePath $sandbox
+        $result.IsValid | Should Be $true
+    }
+
     It 'Test-SynapseFileManifest detects tampering' {
         $entries = @(Get-SynapseFileManifestEntries -Path $sandbox -BasePath $sandbox)
         $manifest = [PSCustomObject]@{ Files = $entries }

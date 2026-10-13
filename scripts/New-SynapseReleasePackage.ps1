@@ -87,11 +87,12 @@ try {
         if ($LASTEXITCODE -ne 0) { $gitCommit = $null }
     }
 
-    # Use the common ancestor of all source paths as the manifest base so
-    # relative paths inside the package are stable regardless of caller cwd
-    # and correct when multiple sibling directories are packaged together.
+    # Compress-Archive preserves each supplied source root. Build manifest
+    # paths from their containing directories so verification uses the same
+    # layout after extraction, including when only one directory is packaged.
     $resolvedSources = @($SourcePaths | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
-    $basePath = Get-SynapseCommonAncestorPath -ResolvedPath $resolvedSources
+    $sourceContainers = @($resolvedSources | ForEach-Object { Split-Path -Parent $_ })
+    $basePath = Get-SynapseCommonAncestorPath -ResolvedPath $sourceContainers
 
     Write-SynapseLog -LogPath $LogPath -Message "Computing manifest for $($SourcePaths.Count) source path(s) relative to '$basePath'..."
     $entries = @(Get-SynapseFileManifestEntries -Path $resolvedSources -BasePath $basePath)

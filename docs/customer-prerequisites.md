@@ -11,7 +11,7 @@ Missing items are the most common cause of delay on day-of deployment.
       `Microsoft.Synapse`, `Microsoft.Storage`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`,
       `Microsoft.Insights`, `Microsoft.ManagedIdentity`.
 - [ ] Naming convention / prefix the customer wants reflected in resource names (used to populate
-      `config/<env>.json`).
+      `infra/parameters/<env>.bicepparam`).
 - [ ] Preferred Azure **region** (must support Synapse and align with any data residency
       requirements).
 
@@ -39,11 +39,15 @@ The deployment identity needs, at minimum, the following **scoped to the target 
 | Contributor (or narrower custom role — see [architecture.md](architecture.md#least-privilege-rbac)) | Target resource group | Deploy Synapse, storage, Key Vault |
 | User Access Administrator *(optional, only if the pipeline assigns RBAC to the workspace managed identity)* | Target resource group | Grant the Synapse managed identity data-plane roles |
 | Key Vault Secrets Officer / Administrator | Target Key Vault | Seed secrets consumed by linked services |
+| Synapse Artifact Publisher | Target Synapse workspace | Publish linked services, datasets, pipelines, and SQL scripts through the artifact pipeline |
+| Storage Blob Data Contributor | PoC storage account | Seed the versioned raw sample CSV during artifact publication |
 
 - [ ] Confirm who on the customer side can **grant** these role assignments (an Owner or User
       Access Administrator on the resource group).
 - [ ] Confirm whether the customer's policy requires **PIM-eligible** rather than standing
       assignments for any human operators.
+- [ ] Confirm each CI deployment identity has the **Synapse Artifact Publisher** workspace role;
+      Azure resource-group Contributor alone does not grant Synapse data-plane publication access.
 
 ## 4. Network and firewall
 
@@ -80,7 +84,8 @@ with the Azure Pricing Calculator at deployment time — figures below are **not
 | Log Analytics / diagnostics | Ingestion + retention based | Minimal if retention kept short |
 
 **Cost-control defaults baked into this PoC:**
-- Dedicated SQL pool is **not** deployed unless explicitly enabled in `config/<env>.json`.
+- Dedicated SQL pool is **not** deployed unless explicitly enabled in
+      `infra/parameters/<env>.bicepparam`.
 - Spark pools use short auto-pause windows by default.
 - Teardown/cleanup (see [deployment-runbook.md](deployment-runbook.md#cleanup)) is provided to
   remove all billable resources promptly after the demo.

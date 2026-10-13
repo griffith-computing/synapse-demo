@@ -19,7 +19,8 @@ repeatable deployment pattern, not a production-hardened reference architecture 
    discovery questions and cleanup.
 
 > **Validation status:** All steps in this repository have been validated offline (template
-> lint/what-if, pipeline YAML validation, unit-level checks). No step has been executed against a
+> lint and unit-level checks). Azure what-if requires authenticated subscription access and is not
+> an offline operation. No step has been executed against a
 > live Azure subscription as part of authoring this documentation. Live validation is a customer-
 > attended activity described in the runbook and must be performed before any production claim.
 
@@ -32,11 +33,24 @@ each pipeline and script references these locations as its contract.
 |--------------------------|--------------------------------------------------------------------------|
 | `infra/`                 | Bicep/ARM (or Terraform) templates for Synapse workspace, storage, networking, and RBAC assignments |
 | `synapse/`               | Synapse artifacts — SQL scripts, Spark notebooks, pipelines/datasets, linked services |
-| `config/`                | Per-environment parameter files (e.g. `dev.json`, `test.json`, `prod.json`) consumed by both pipelines |
+| `config/`                | Per-environment overrides for Synapse workspace artifact publication |
 | `scripts/`               | Helper scripts for validation, smoke tests, and cleanup (PowerShell/bash) |
 | `.github/workflows/`     | GitHub Actions pipeline definitions (build/validate/deploy/promote) |
 | `azure-pipelines/`       | Azure DevOps pipeline definitions (build/validate/deploy/promote) |
 | `docs/`                  | This documentation set (owned independently of the infra/pipeline code) |
+
+## Release pipelines
+
+Both supported CI platforms use two independent build-once, promote-everywhere release streams:
+
+- The infrastructure pipeline packages only `infra/` and deploys Bicep through dev, test, and
+   prod. Changes limited to `synapse/` or `config/` do not trigger it.
+- The artifact pipeline packages `synapse/`, `config/`, and `sample/`, then publishes the same immutable
+   package through dev, test, and prod without redeploying infrastructure. The target workspace
+   must already exist.
+
+Infrastructure and Synapse artifacts also have separate rollback entry points, so a prior artifact
+package can be republished without changing Azure resources.
 
 ## Documentation set
 

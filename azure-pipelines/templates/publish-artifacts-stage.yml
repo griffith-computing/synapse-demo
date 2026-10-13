@@ -1,0 +1,185 @@
+##
+# Reusable Synapse workspace artifact publication stage.
+# Downloads one immutable package, verifies it, publishes its contents to an
+# existing workspace, and runs environment-resolved smoke tests.
+##
+parameters:
+  - name: stageName
+    type: string
+  - name: displayName
+    type: string
+  - name: environmentName
+    type: string
+  - name: serviceConnection
+    type: string
+  - name: resourceGroupName
+    type: string
+  - name: workspaceName
+    type: string
+  - name: subscriptionId
+    type: string
+  - name: dependsOn
+    type: object
+    default: []
+  - name: downloadMode
+    type: string
+    default: current
+  - name: sourceBuildId
+    type: string
+    default: ''
+  - name: pipelineResourceAlias
+    type: string
+    default: ''
+  - name: packageVersion
+    type: string
+    default: ''
+  - name: artifactName
+    type: string
+    default: synapse-artifacts-release
+
+stages:
+  - stage: ${{ parameters.stageName }}
+    displayName: ${{ parameters.displayName }}
+    dependsOn: ${{ parameters.dependsOn }}
+    jobs:
+      - deployment: Publish
+        displayName: ${{ parameters.displayName }}
+        environment: ${{ parameters.environmentName }}
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - ${{ if eq(parameters.downloadMode, 'current') }}:
+                    - download: current
+                      artifact: ${{ parameters.artifactName }}
+                      displayName: Download Synapse artifact package (current run)
+
+                - ${{ if eq(parameters.downloadMode, 'specific') }}:
+                    - task: DownloadPipelineArtifact@2
+                      displayName: Download Synapse artifact package (prior run)
+                      inputs:
+                        source: specific
+                        project: $(System.TeamProject)
+                        pipeline: ${{ parameters.pipelineResourceAlias }}
+                        runVersion: specific
+                        runId: ${{ parameters.sourceBuildId }}
+                        artifact: ${{ parameters.artifactName }}
+                        path: $(Pipeline.Workspace)/${{ parameters.artifactName }}
+
+                - pwsh: |
+                    $packageDirectory = "$(Pipeline.Workspace)/${{ parameters.artifactName }}"
+                    $zip = Get-ChildItem -Path $packageDirectory -Filter *.zip | Select-Object -First 1
+                    $manifest = Get-ChildItem -Path $packageDirectory -Filter *.manifest.json | Select-Object -First 1
+                    if (-not $zip) { throw "No .zip package found in downloaded artifact." }
+                    if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
+
+                    $expectedVersion = '${{ parameters.packageVersion }}'
+                    if ($expectedVersion) {
+                      $actualVersion = (Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json).Version
+                      if ($actualVersion -ne $expectedVersion) {
+                        throw "Downloaded package version '$actualVersion' does not match requested version '$expectedVersion'."
+                      }
+                    }
+
+                    Expand-Archive -LiteralPath $zip.FullName -DestinationPath "$(Pipeline.Workspace)/artifacts-extracted" -Force
+                    Write-Host "##vso[task.setvariable variable=artifactManifestPath]$($manifest.FullName)"
+                  displayName: Select and expand artifact package
+
+                - task: PowerShell@2
+                  displayName: Verify artifact package integrity
+                  inputs:
+                    targetType: filePath
+                    filePath: $(Build.SourcesDirectory)/scripts/Test-SynapseRepository.ps1
+                    arguments: >-
+                      -RepositoryRoot "$(Build.SourcesDirectory)"
+                      -ArtifactManifestPath "$(artifactManifestPath)"
+                      -ArtifactBasePath "$(Pipeline.Workspace)/artifacts-extracted"
+                      -Offline
+                    pwsh: true
+
+                - task: AzureCLI@2
+                  displayName: Resolve workspace publication endpoints
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      $workspaceJson = az synapse workspace show `
+                        --name "${{ parameters.workspaceName }}" `
+                        --resource-group "${{ parameters.resourceGroupName }}" `
+                        --subscription "${{ parameters.subscriptionId }}" `
+                        --output json
+                      if ($LASTEXITCODE -ne 0 -or -not $workspaceJson) {
+                        throw "Synapse workspace '${{ parameters.workspaceName }}' was not found. Deploy infrastructure before publishing artifacts."
+                      }
+
+                      $workspace = $workspaceJson | ConvertFrom-Json
+                      $dfsEndpoint = $workspace.defaultDataLakeStorage.accountUrl
+                      $webEndpoint = $workspace.connectivityEndpoints.web
+                      if (-not $dfsEndpoint) { throw "Workspace defaultDataLakeStorage.accountUrl is empty." }
+                      if (-not $webEndpoint) { $webEndpoint = "https://${{ parameters.workspaceName }}.dev.azuresynapse.net" }
+
+                      Write-Host "##vso[task.setvariable variable=storageDfsEndpoint]$dfsEndpoint"
+                      Write-Host "##vso[task.setvariable variable=workspaceWebEndpoint]$webEndpoint"
+                      Write-Host "##vso[task.setvariable variable=storageAccountName]$(([Uri]$dfsEndpoint).Host.Split('.')[0])"
+                    addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Seed raw sample data
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az storage fs file upload `
+                        --account-name "$(storageAccountName)" `
+                        --file-system raw `
+                        --path "sample/sample_customers.csv" `
+                        --source "$(Pipeline.Workspace)/artifacts-extracted/sample/raw/sample_customers.csv" `
+                        --auth-mode login `
+                        --overwrite true `
+                        --only-show-errors
+                      if ($LASTEXITCODE -ne 0) { throw "Failed to seed raw sample data." }
+                    addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Publish Synapse workspace artifacts
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: scriptPath
+                    scriptPath: $(Build.SourcesDirectory)/scripts/Publish-SynapseArtifacts.ps1
+                    arguments: >-
+                      -ArtifactsRoot "$(Pipeline.Workspace)/artifacts-extracted/synapse"
+                      -ConfigFile "$(Pipeline.Workspace)/artifacts-extracted/config/${{ parameters.environmentName }}.json"
+                      -WorkspaceName "${{ parameters.workspaceName }}"
+                      -SubscriptionId "${{ parameters.subscriptionId }}"
+                      -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageDfsEndpoint)"
+                    addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Run resolved Synapse smoke tests
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      $definitions = Get-Content "$(Build.SourcesDirectory)/tests/fixtures/smoke-tests.sample.json" -Raw | ConvertFrom-Json
+                      foreach ($definition in $definitions) {
+                        if ($definition.Type -eq 'AzCommand') {
+                          for ($index = 0; $index -lt $definition.Command.Count; $index++) {
+                            if ($definition.Command[$index] -eq 'synws') { $definition.Command[$index] = '${{ parameters.workspaceName }}' }
+                            if ($definition.Command[$index] -eq 'sample-pipeline') { $definition.Command[$index] = 'PL_CopyRawToCurated' }
+                          }
+                        }
+                        if ($definition.Type -eq 'HttpCheck') { $definition.Url = '$(workspaceWebEndpoint)' }
+                      }
+                      $resolvedPath = "$(Agent.TempDirectory)/synapse-smoke-tests.json"
+                      $definitions | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolvedPath -Encoding UTF8
+                      & "$(Build.SourcesDirectory)/scripts/Invoke-SynapseSmokeTests.ps1" -TestDefinitionsPath $resolvedPath
+                      if ($LASTEXITCODE -ne 0) { throw "One or more Synapse smoke tests failed." }
+                    addSpnToEnvironment: true

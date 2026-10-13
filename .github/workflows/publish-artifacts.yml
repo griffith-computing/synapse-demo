@@ -1,0 +1,102 @@
+##
+# Build-once, promote-everywhere workflow for Synapse workspace artifacts.
+# Infrastructure must already exist; this workflow never invokes Bicep.
+##
+name: Publish Synapse Artifacts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - synapse/**
+      - config/**
+      - sample/**
+      - .github/workflows/publish-artifacts.yml
+      - .github/workflows/publish-artifacts-environment.yml
+      - scripts/Common.psm1
+      - scripts/Invoke-SynapseSmokeTests.ps1
+      - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Publish-SynapseArtifacts.ps1
+      - scripts/Test-SynapseRepository.ps1
+      - tests/fixtures/smoke-tests.sample.json
+  workflow_dispatch: {}
+
+concurrency:
+  group: publish-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build immutable Synapse artifact package
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.meta.outputs.artifact-name }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute artifact version
+        id: meta
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0,7)
+          $version = "${{ github.run_number }}-$shortSha"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "artifact-name=synapse-artifacts-release-$version" >> $env:GITHUB_OUTPUT
+
+      - name: Package Synapse workspace artifacts
+        shell: pwsh
+        run: |
+          ./scripts/New-SynapseReleasePackage.ps1 `
+            -SourcePaths "${{ github.workspace }}/synapse,${{ github.workspace }}/config,${{ github.workspace }}/sample" `
+            -OutputDirectory "${{ github.workspace }}/dist" `
+            -Version "${{ steps.meta.outputs.version }}" `
+            -PackageName "synapse-artifacts"
+
+      - name: Publish immutable Synapse artifact package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact-name }}
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-dev:
+    name: Publish artifacts (dev)
+    needs: package
+    uses: ./.github/workflows/publish-artifacts-environment.yml
+    with:
+      environment: dev
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read
+
+  publish-test:
+    name: Publish artifacts (test)
+    needs: [package, publish-dev]
+    uses: ./.github/workflows/publish-artifacts-environment.yml
+    with:
+      environment: test
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read
+
+  publish-prod:
+    name: Publish artifacts (prod)
+    needs: [package, publish-test]
+    uses: ./.github/workflows/publish-artifacts-environment.yml
+    with:
+      environment: prod
+      artifact-name: ${{ needs.package.outputs.artifact-name }}
+      package-version: ${{ needs.package.outputs.version }}
+    permissions:
+      id-token: write
+      contents: read

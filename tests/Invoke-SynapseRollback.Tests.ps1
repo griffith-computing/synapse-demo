@@ -63,6 +63,23 @@ Describe 'Invoke-SynapseRollback.ps1' {
         $result.StdOut | Should Match "SelectedVersion\s*:\s*1\.0\.0"
     }
 
+    It 'verifies a package manifest against a separate extraction root' {
+        $packageDir = Join-Path $sandbox 'separate-package'
+        $extractedDir = Join-Path $sandbox 'separate-extracted'
+        New-Item -ItemType Directory -Path $packageDir, $extractedDir -Force | Out-Null
+        New-FakeReleasePackage -Directory $packageDir -Version '2.0.0' -CreatedUtc '2024-04-01T00:00:00.0000000Z'
+        Move-Item -LiteralPath (Join-Path $packageDir 'asset-2.0.0.txt') -Destination $extractedDir
+
+        $result = Invoke-ScriptUnderTest -ScriptName 'Invoke-SynapseRollback.ps1' -Parameters @{
+            PackageDirectory = $packageDir
+            ArtifactBasePath = $extractedDir
+            TargetVersion    = '2.0.0'
+            DryRun           = $true
+        }
+        $result.ExitCode | Should Be 0
+        $result.StdOut | Should Match "ChecksumsVerified\s*:\s*True"
+    }
+
     It 'fails explicitly (RollbackFailed) when the newest candidate has a checksum mismatch' {
         $result = Invoke-ScriptUnderTest -ScriptName 'Invoke-SynapseRollback.ps1' -Parameters @{
             PackageDirectory = $sandbox

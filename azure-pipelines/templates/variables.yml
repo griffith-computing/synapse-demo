@@ -42,3 +42,10 @@ variables:
 
   - name: releaseArtifactName
     value: 'synapse-infra-release'
+
+  - name: synapseArtifactName
+    value: 'synapse-artifacts-release'
+
+  # Numeric Azure DevOps pipeline definition ID used by artifact rollback.
+  - name: synapseArtifactPipelineId
+    value: '0'

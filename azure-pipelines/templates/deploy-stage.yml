@@ -3,9 +3,8 @@
 #
 # Keeps azure-pipelines/deploy.yml and azure-pipelines/rollback.yml thin:
 # all environment wiring lives here; all deployment logic lives in
-# scripts/Deploy-SynapseWorkspace.ps1, scripts/Publish-SynapseArtifacts.ps1,
-# scripts/Invoke-SynapseRollback.ps1, scripts/Test-SynapseRepository.ps1 and
-# scripts/Invoke-SynapseSmokeTests.ps1 (owned by the scripts/ workstream).
+# scripts/Deploy-SynapseWorkspace.ps1, scripts/Invoke-SynapseRollback.ps1 and
+# scripts/Test-SynapseRepository.ps1 (owned by the scripts/ workstream).
 #
 # Azure authentication uses the pipeline's Azure Resource Manager service
 # connection configured for Workload Identity Federation (OIDC) - no
@@ -19,9 +18,6 @@
 # Approvals and checks) - this template only references the environment
 # by name via the `environment:` property below.
 #
-# ASSUMPTION: tests/fixtures/smoke-tests.sample.json (or an
-# environment-specific equivalent) exists and is supplied by the
-# tests/scripts workstream; this template references it by convention.
 ##
 parameters:
   - name: stageName # unique stage identifier, e.g. Deploy_Dev / Rollback_Prod
@@ -127,12 +123,13 @@ stages:
                         scriptPath: $(Build.SourcesDirectory)/scripts/Invoke-SynapseRollback.ps1
                         arguments: >-
                           -PackageDirectory "$(Pipeline.Workspace)/${{ parameters.artifactName }}"
+                          -ArtifactBasePath "$(Pipeline.Workspace)/package-extracted"
                           -TargetVersion "${{ parameters.packageVersion }}"
                         addSpnToEnvironment: true
 
                 - ${{ if eq(parameters.isRollback, false) }}:
                     - task: AzureCLI@2
-                      displayName: Offline what-if validation
+                      displayName: Pre-deployment what-if validation
                       inputs:
                         azureSubscription: ${{ parameters.serviceConnection }}
                         scriptType: pscore
@@ -141,11 +138,13 @@ stages:
                         arguments: >-
                           -ResourceGroupName "${{ parameters.resourceGroupName }}"
                           -WorkspaceName "${{ parameters.workspaceName }}"
-                          -TemplateFile "$(Pipeline.Workspace)/package-extracted/main.bicep"
-                          -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/parameters/${{ parameters.environmentName }}.bicepparam"
+                          -TemplateFile "$(Pipeline.Workspace)/package-extracted/infra/main.bicep"
+                          -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/infra/parameters/${{ parameters.environmentName }}.bicepparam"
                           -SubscriptionId "${{ parameters.subscriptionId }}"
                           -DryRun
                         addSpnToEnvironment: true
+                      env:
+                        SYNAPSE_SQL_ADMIN_PASSWORD: $(sqlAdministratorPassword.${{ parameters.environmentName }})
 
                 - task: AzureCLI@2
                   displayName: Deploy or redeploy package
@@ -157,44 +156,10 @@ stages:
                     arguments: >-
                       -ResourceGroupName "${{ parameters.resourceGroupName }}"
                       -WorkspaceName "${{ parameters.workspaceName }}"
-                      -TemplateFile "$(Pipeline.Workspace)/package-extracted/main.bicep"
-                      -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/parameters/${{ parameters.environmentName }}.bicepparam"
+                      -TemplateFile "$(Pipeline.Workspace)/package-extracted/infra/main.bicep"
+                      -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/infra/parameters/${{ parameters.environmentName }}.bicepparam"
                       -SubscriptionId "${{ parameters.subscriptionId }}"
                     addSpnToEnvironment: true
-
-                - task: AzureCLI@2
-                  displayName: Resolve infra outputs for artifact publishing
-                  inputs:
-                    azureSubscription: ${{ parameters.serviceConnection }}
-                    scriptType: pscore
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      $dfsEndpoint = az deployment group list `
-                        --resource-group "${{ parameters.resourceGroupName }}" `
-                        --query "[?starts_with(name, 'synapse-${{ parameters.workspaceName }}-')] | sort_by(@, &properties.timestamp)[-1].properties.outputs.storageAccountDfsEndpoint.value" -o tsv
-                      if (-not $dfsEndpoint) { throw "Unable to resolve storageAccountDfsEndpoint from the infra deployment output." }
-                      Write-Host "##vso[task.setvariable variable=storageDfsEndpoint]$dfsEndpoint"
-                    addSpnToEnvironment: true
-
-                - task: AzureCLI@2
-                  displayName: Publish Synapse workspace artifacts
-                  inputs:
-                    azureSubscription: ${{ parameters.serviceConnection }}
-                    scriptType: pscore
-                    scriptLocation: scriptPath
-                    scriptPath: $(Build.SourcesDirectory)/scripts/Publish-SynapseArtifacts.ps1
-                    arguments: >-
-                      -ArtifactsRoot "$(Pipeline.Workspace)/package-extracted/synapse"
-                      -ConfigFile "$(Pipeline.Workspace)/package-extracted/config/${{ parameters.environmentName }}.json"
-                      -WorkspaceName "${{ parameters.workspaceName }}"
-                      -SubscriptionId "${{ parameters.subscriptionId }}"
-                      -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageDfsEndpoint)"
-                    addSpnToEnvironment: true
-
-                - task: PowerShell@2
-                  displayName: Run Invoke-SynapseSmokeTests.ps1
-                  inputs:
-                    targetType: filePath
-                    filePath: $(Build.SourcesDirectory)/scripts/Invoke-SynapseSmokeTests.ps1
-                    arguments: -TestDefinitionsPath "$(Build.SourcesDirectory)/tests/fixtures/smoke-tests.sample.json"
-                    pwsh: true
+                  env:
+                    SYNAPSE_SQL_ADMIN_PASSWORD: $(sqlAdministratorPassword.${{ parameters.environmentName }})
+# End of reusable stage template.

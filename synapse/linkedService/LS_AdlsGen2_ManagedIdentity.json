@@ -8,7 +8,7 @@
     ],
     "type": "AzureBlobFS",
     "typeProperties": {
-      "url": "https://REPLACE_WITH_STORAGE_ACCOUNT.dfs.core.windows.net"
+      "url": "{{STORAGE_ACCOUNT_DFS_ENDPOINT}}"
     },
     "connectVia": {
       "referenceName": "AutoResolveIntegrationRuntime",
