@@ -21,11 +21,10 @@
 #   Deploy-SynapseWorkspace.ps1 -ResourceGroupName <rg> -WorkspaceName <name> `
 #     -TemplateFile <path> -TemplateParametersFile <path> -SubscriptionId <id> [-DryRun]
 #   Invoke-SynapseRollback.ps1 -PackageDirectory <path> -TargetVersion <version>
-# Per-environment, non-secret Azure identifiers and the Synapse
-# workspace/resource-group names are expected to be configured as GitHub
-# Environment variables (Settings > Environments > <env> > Variables):
-# AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
-# AZURE_RESOURCE_GROUP, SYNAPSE_WORKSPACE_NAME. Required
+# Azure login identifiers use environment secrets first, then the
+# environment-prefixed repository secrets forwarded by the caller.
+# AZURE_RESOURCE_GROUP and SYNAPSE_WORKSPACE_NAME are GitHub variables.
+# Required
 # approvals/reviewers for test/prod are configured on those same GitHub
 # Environments per docs/deployment-runbook.md - this workflow only
 # references the environment name.
@@ -53,6 +52,15 @@ on:
         required: false
         type: boolean
         default: false
+    secrets:
+      repository_AZURE_CLIENT_ID:
+        required: false
+      repository_AZURE_TENANT_ID:
+        required: false
+      repository_AZURE_SUBSCRIPTION_ID:
+        required: false
+      repository_SYNAPSE_SQL_ADMIN_PASSWORD:
+        required: false
 
 permissions:
   id-token: write # required for OIDC federation with Azure
@@ -69,6 +77,10 @@ jobs:
     name: ${{ inputs.is-rollback && 'Rollback' || 'Deploy' }} (${{ inputs.environment }})
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || secrets.repository_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || secrets.repository_AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || secrets.repository_AZURE_SUBSCRIPTION_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,9 +109,6 @@ jobs:
         shell: pwsh
         env:
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           Write-Host "Checking Azure login secrets for environment '$env:DEPLOYMENT_ENVIRONMENT' in '$env:GITHUB_REPOSITORY'."
           Write-Host "Workflow commit: $env:GITHUB_SHA; run attempt: $env:GITHUB_RUN_ATTEMPT"
@@ -107,22 +116,22 @@ jobs:
           $missing = @()
           foreach ($name in $required) {
             if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              Write-Host "::error::Required environment secret '$name' is missing or empty."
+              Write-Host "::error::Secret '$name' is missing or empty; configure the environment secret or repository secret '${env:DEPLOYMENT_ENVIRONMENT}_$name'."
               $missing += $name
             } else {
               Write-Host "${name}: present"
             }
           }
           if ($missing.Count -gt 0) {
-            throw "Azure login configuration is incomplete. Set $($missing -join ', ') under Settings > Environments > $env:DEPLOYMENT_ENVIRONMENT > Environment secrets in $env:GITHUB_REPOSITORY. This workflow reads secrets, not variables."
+            throw "Azure login configuration is incomplete. Set $($missing -join ', ') as environment secrets for '$env:DEPLOYMENT_ENVIRONMENT', or as repository secrets prefixed with '${env:DEPLOYMENT_ENVIRONMENT}_' in $env:GITHUB_REPOSITORY. This workflow reads secrets, not variables."
           }
 
       - name: Azure login (OIDC / workload identity federation)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Select and verify rollback candidate
         if: ${{ inputs.is-rollback }}
@@ -142,10 +151,10 @@ jobs:
             -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
             -TemplateFile "${{ github.workspace }}/package-extracted/infra/main.bicep" `
             -TemplateParametersFile "${{ github.workspace }}/package-extracted/infra/parameters/${{ inputs.environment }}.bicepparam" `
-            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID" `
             -DryRun
         env:
-          SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD }}
+          SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD || secrets.repository_SYNAPSE_SQL_ADMIN_PASSWORD }}
 # End of reusable workflow.
       - name: Deploy / redeploy package
         id: deploy_infra
@@ -156,6 +165,6 @@ jobs:
             -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
             -TemplateFile "${{ github.workspace }}/package-extracted/infra/main.bicep" `
             -TemplateParametersFile "${{ github.workspace }}/package-extracted/infra/parameters/${{ inputs.environment }}.bicepparam" `
-            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID"
         env:
-          SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD }}
+          SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD || secrets.repository_SYNAPSE_SQL_ADMIN_PASSWORD }}

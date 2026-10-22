@@ -81,6 +81,10 @@ Perform once per environment (dev/test/prod), for whichever platform(s) you use.
    `test`, `prod`) and configure:
    - Environment **secrets** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` for
      infrastructure deployment. The current infrastructure workflow reads `secrets`, not `vars`.
+     If an environment secret is unavailable, deployment and rollback fall back to the
+     environment-prefixed repository secret, e.g. `dev_AZURE_CLIENT_ID`. Configure these under
+     **Settings > Secrets and variables > Actions > Repository secrets**. The calling workflows
+     explicitly forward only the matching environment's fallback secrets.
    - Environment **variables** with those same names and values for the artifact publication
      workflow, which reads `vars`. When running both pipelines, configure both locations.
    - These values are identifiers, not credentials; a client secret is never created or stored.
@@ -91,8 +95,9 @@ Perform once per environment (dev/test/prod), for whichever platform(s) you use.
 If infrastructure login reports that `client-id` or `tenant-id` is missing, inspect the
 **Validate Azure login configuration** step. It reports the repository, target environment,
 workflow commit, run attempt, and whether each required login secret is present, without
-printing secret values. Check secrets in that exact repository/environment, not just repository
-variables or a different environment. Environment secrets are read by the reusable job's
+printing secret values. It checks the resolved environment-secret/repository-secret fallback.
+Check secrets in that exact repository/environment, not just repository variables or a different
+environment. Environment secrets are read by the reusable job's
 `environment` binding and do not require `secrets: inherit`; repository secrets would need
 explicit forwarding or inheritance from the calling workflow. Start a new run on the updated
 commit to use workflow changes; re-running an older run does not update its workflow definition.
@@ -117,7 +122,9 @@ federation settings.
   maps only the matching value to `SYNAPSE_SQL_ADMIN_PASSWORD` for its Azure CLI task.
 
 For GitHub Actions, add `SYNAPSE_SQL_ADMIN_PASSWORD` as a secret on each `dev`, `test`, and `prod`
-GitHub Environment. Do not define it as a repository variable or commit it to a parameter file.
+GitHub Environment, or use repository secrets `dev_SYNAPSE_SQL_ADMIN_PASSWORD`,
+`test_SYNAPSE_SQL_ADMIN_PASSWORD`, and `prod_SYNAPSE_SQL_ADMIN_PASSWORD` as fallbacks.
+Do not define passwords as variables or commit them to a parameter file.
 
 The deployment identity also requires the **Synapse Artifact Publisher** role on each target
 workspace. Resource-group Contributor covers ARM deployment but does not grant Synapse data-plane

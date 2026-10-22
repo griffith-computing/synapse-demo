@@ -84,6 +84,35 @@ GitHub secrets and variables are separate: setting one does not populate the oth
 client/tenant values cause `azure/login` to fail before federation or RBAC is checked.
 No Azure client secret is needed or should be created.
 
+#### Repository-secret fallback for infrastructure deployment and rollback
+
+Environment secrets take precedence. If one is unavailable, the infrastructure workflows use
+the corresponding repository secret prefixed with the target environment:
+
+| Environment secret | Repository fallback for `dev` |
+|---|---|
+| `AZURE_CLIENT_ID` | `dev_AZURE_CLIENT_ID` |
+| `AZURE_TENANT_ID` | `dev_AZURE_TENANT_ID` |
+| `AZURE_SUBSCRIPTION_ID` | `dev_AZURE_SUBSCRIPTION_ID` |
+| `SYNAPSE_SQL_ADMIN_PASSWORD` | `dev_SYNAPSE_SQL_ADMIN_PASSWORD` |
+
+- [ ] For a personal demo using repository secrets, add these under **Settings > Secrets and
+      variables > Actions > Repository secrets**. Use `test_` and `prod_` prefixes for the
+      corresponding stages. Secret names are case-insensitive.
+- [ ] Confirm the account's GitHub plan supports the required environment features.
+      [Private-repository environment secrets require GitHub Pro for personal accounts, or an
+      eligible organization plan](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments#prerequisites).
+      Repository fallback does not enable otherwise unavailable environment protection rules.
+- [ ] Where environment variables are unavailable, configure `AZURE_RESOURCE_GROUP` and
+      `SYNAPSE_WORKSPACE_NAME` as repository Actions variables for a single-environment demo.
+      These unprefixed repository variables are shared by all stages; do not promote to
+      test/prod unless their resource-group/workspace configuration is separately supported.
+
+The fallback applies to infrastructure deployment and rollback, including SQL administrator
+password injection. Artifact publication still reads Azure identifiers from `vars` and requires
+its own variable configuration. Repository fallback values are explicitly forwarded by callers;
+the reusable workflow does not automatically receive all repository secrets.
+
 ### Azure DevOps configuration
 
 - [ ] Create and authorize a workload-identity-federated Azure Resource Manager service

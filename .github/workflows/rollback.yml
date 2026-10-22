@@ -81,6 +81,11 @@ jobs:
       artifact-name: rollback-${{ inputs.artifact_name }}
       package-version: ${{ inputs.package_version }}
       is-rollback: true
+    secrets:
+      repository_AZURE_CLIENT_ID: ${{ secrets[format('{0}_AZURE_CLIENT_ID', inputs.environment)] }}
+      repository_AZURE_TENANT_ID: ${{ secrets[format('{0}_AZURE_TENANT_ID', inputs.environment)] }}
+      repository_AZURE_SUBSCRIPTION_ID: ${{ secrets[format('{0}_AZURE_SUBSCRIPTION_ID', inputs.environment)] }}
+      repository_SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets[format('{0}_SYNAPSE_SQL_ADMIN_PASSWORD', inputs.environment)] }}
     permissions:
       id-token: write
       contents: read
