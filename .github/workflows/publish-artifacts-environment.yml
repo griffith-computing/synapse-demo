@@ -36,8 +36,10 @@ concurrency:
 
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     name: Publish artifacts (${{ inputs.environment }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64, synapse-private]
+    timeout-minutes: 60
     environment: ${{ inputs.environment }}
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || secrets.repository_AZURE_CLIENT_ID }}
@@ -108,6 +110,15 @@ jobs:
           echo "storage-dfs-endpoint=$dfsEndpoint" >> $env:GITHUB_OUTPUT
           echo "storage-account-name=$(([Uri]$dfsEndpoint).Host.Split('.')[0])" >> $env:GITHUB_OUTPUT
           echo "web-endpoint=$webEndpoint" >> $env:GITHUB_OUTPUT
+
+      - name: Verify environment private path
+        shell: pwsh
+        env:
+          STORAGE_ACCOUNT_NAME: ${{ steps.workspace.outputs.storage-account-name }}
+          WORKSPACE_NAME: ${{ vars.SYNAPSE_WORKSPACE_NAME }}
+        run: |
+          ./scripts/Test-RunnerPrivateConnectivity.ps1 -StorageAccountName $env:STORAGE_ACCOUNT_NAME `
+            -WorkspaceName $env:WORKSPACE_NAME
 
       - name: Seed raw sample data
         shell: pwsh

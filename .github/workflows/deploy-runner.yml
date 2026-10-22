@@ -1,0 +1,131 @@
+name: Deploy shared runner
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    secrets:
+      RUNNER_AZURE_CLIENT_ID:
+        required: false
+      RUNNER_AZURE_TENANT_ID:
+        required: false
+      RUNNER_AZURE_SUBSCRIPTION_ID:
+        required: false
+      RUNNER_ADMIN_PASSWORD:
+        required: false
+      RUNNER_APP_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: shared-runner-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: runner
+    timeout-minutes: 120
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || secrets.RUNNER_AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || secrets.RUNNER_AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || secrets.RUNNER_AZURE_SUBSCRIPTION_ID }}
+      RUNNER_RESOURCE_GROUP: ${{ vars.RUNNER_RESOURCE_GROUP }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate bootstrap configuration
+        shell: pwsh
+        env:
+          RUNNER_APP_ID: ${{ vars.RUNNER_APP_ID }}
+          RUNNER_APP_PRIVATE_KEY: ${{ secrets.RUNNER_APP_PRIVATE_KEY }}
+          RUNNER_ADMIN_PASSWORD: ${{ secrets.RUNNER_ADMIN_PASSWORD }}
+        run: |
+          foreach ($name in @('AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'RUNNER_RESOURCE_GROUP', 'RUNNER_APP_ID', 'RUNNER_APP_PRIVATE_KEY', 'RUNNER_ADMIN_PASSWORD')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing shared runner setting '$name'. See docs/deployment-runbook.md."
+            }
+          }
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy shared VM, Bastion and network
+        shell: pwsh
+        env:
+          RUNNER_ADMIN_PASSWORD: ${{ secrets.RUNNER_ADMIN_PASSWORD }}
+          RUNNER_VM_SIZE: ${{ vars.RUNNER_VM_SIZE || 'Standard_B2as_v2' }}
+          RUNNER_ADMIN_USERNAME: ${{ vars.RUNNER_ADMIN_USERNAME || 'runneradmin' }}
+          VNET_CIDR: ${{ vars.RUNNER_VNET_CIDR || '10.42.0.0/16' }}
+          BASTION_CIDR: ${{ vars.RUNNER_BASTION_CIDR || '10.42.0.0/26' }}
+          RUNNER_CIDR: ${{ vars.RUNNER_SUBNET_CIDR || '10.42.1.0/24' }}
+          ENDPOINT_CIDR: ${{ vars.RUNNER_ENDPOINT_CIDR || '10.42.2.0/24' }}
+        run: |
+          ./scripts/Deploy-SharedRunner.ps1 -ResourceGroupName $env:RUNNER_RESOURCE_GROUP `
+            -VmSize $env:RUNNER_VM_SIZE -AdminUsername $env:RUNNER_ADMIN_USERNAME `
+            -VnetAddressPrefix $env:VNET_CIDR -BastionSubnetPrefix $env:BASTION_CIDR `
+            -RunnerSubnetPrefix $env:RUNNER_CIDR -EndpointSubnetPrefix $env:ENDPOINT_CIDR
+
+      - name: Resolve shared deployment
+        id: shared
+        shell: pwsh
+        run: |
+          $json = az deployment group show -g $env:RUNNER_RESOURCE_GROUP -n shared-runner --query properties.outputs -o json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve shared runner deployment.' }
+          $outputs = $json | ConvertFrom-Json
+          "vm-id=$($outputs.vmResourceId.value)" >> $env:GITHUB_OUTPUT
+          "vm-name=$($outputs.vmName.value)" >> $env:GITHUB_OUTPUT
+          "location=$($outputs.location.value)" >> $env:GITHUB_OUTPUT
+
+      - name: Install Windows runner prerequisites
+        shell: pwsh
+        env:
+          VM_ID: ${{ steps.shared.outputs.vm-id }}
+          VM_LOCATION: ${{ steps.shared.outputs.location }}
+        run: |
+          ./scripts/Invoke-RunnerManagedCommand.ps1 -VmResourceId $env:VM_ID -Location $env:VM_LOCATION `
+            -Name "prerequisites-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" -ScriptPath ./scripts/Initialize-GitHubRunner.ps1
+
+      - name: Create repository administration token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RUNNER_APP_ID }}
+          private-key: ${{ secrets.RUNNER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write
+
+      - name: Register Windows runner service
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VM_ID: ${{ steps.shared.outputs.vm-id }}
+          VM_NAME: ${{ steps.shared.outputs.vm-name }}
+          VM_LOCATION: ${{ steps.shared.outputs.location }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $registration = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runners/registration-token" -Headers $headers
+          if ([string]::IsNullOrWhiteSpace($registration.token)) { throw 'GitHub returned no registration token.' }
+          Write-Host "::add-mask::$($registration.token)"
+          ./scripts/Invoke-RunnerManagedCommand.ps1 -VmResourceId $env:VM_ID -Location $env:VM_LOCATION `
+            -Name "registration-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" -ScriptPath ./scripts/Register-GitHubRunner.ps1 `
+            -Parameters @{ Repository = $env:GITHUB_REPOSITORY; RunnerName = $env:VM_NAME } `
+            -ProtectedParameters @{ RegistrationToken = $registration.token } -TimeoutSeconds 600
+          $deadline = [DateTime]::UtcNow.AddMinutes(3)
+          do {
+            $runners = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runners?per_page=100" -Headers $headers
+            $runner = @($runners.runners | Where-Object name -EQ $env:VM_NAME)
+            if ($runner.Count -eq 1 -and $runner[0].status -eq 'online' -and 'synapse-private' -in $runner[0].labels.name) {
+              Write-Host "Runner '$env:VM_NAME' is online with the required label."
+              exit 0
+            }
+            Start-Sleep -Seconds 10
+          } while ([DateTime]::UtcNow -lt $deadline)
+          throw "Runner '$env:VM_NAME' did not become available in GitHub."

@@ -6,7 +6,8 @@ This PoC deploys an Azure Synapse Analytics workspace and its supporting resourc
 Infrastructure-as-Code (IaC), with a CI/CD layer that can run on **either** GitHub Actions or
 Azure DevOps Pipelines against the same `infra/`, `synapse/`, and `config/` sources. The two
 pipeline implementations are kept functionally equivalent so a customer can adopt whichever
-platform they already standardize on.
+platform they already standardize on. GitHub deployment jobs additionally use the shared
+Windows runner described below; Azure DevOps agent networking remains independently configured.
 
 ```
                  ┌─────────────────────────────────────────────────────┐
@@ -74,6 +75,34 @@ matching `config/<env>.json`, and publishes only files extracted from the verifi
 
 ## Identity and RBAC model
 
+### Shared Windows runner network
+
+[The shared template](../infra/runner/main.bicep) deploys a Windows Server 2022 x64
+`Standard_B2as_v2` VM in a dedicated West US 3 resource group, separate from environment
+lifecycle/rollback. It has no public IP. Basic Bastion provides browser RDP through a dedicated
+`AzureBastionSubnet`; a NAT Gateway supplies explicit outbound internet access for GitHub,
+Azure APIs and prerequisite downloads. The runner subnet accepts RDP only from Bastion.
+
+Shared private DNS zones and VNet links are created once. The separately deployed
+[connectivity template](../infra/runner/connectivity.bicep) creates Storage blob/dfs and Synapse
+Dev/Sql/SqlOnDemand private endpoints for each environment, even when target resources are in
+East US 2. It does not relocate resources or disable public access. Synapse's managed VNet
+is separate; private endpoints for this runner do not establish the integration runtime's
+outbound storage access.
+
+[Hosted bootstrap](../.github/workflows/deploy-runner.yml) installs prerequisites and registers
+the Windows service using a short-lived GitHub App-derived registration token, delivered through
+protected Azure managed Run Command parameters. GitHub App credentials never go onto the VM.
+Completed Run Command resources and local payload files are removed; failed commands are retained
+for diagnosis. Azure VM administrators can control the runner and must be trusted accordingly.
+
+Packaging and PR validation remain GitHub-hosted. Only protected-main environment deployment,
+publication and their reusable rollback jobs run on labels
+`[self-hosted, Windows, X64, synapse-private]`. Per-environment OIDC/approvals remain in effect.
+One persistent repository runner serializes work but is not a security boundary between
+environments. It must not run untrusted code. Runner/OS update responsibility belongs to the
+operator, and automatic runner updates must remain allowed.
+
 ### Workload identity federation
 
 Both pipelines authenticate to Azure **without stored client secrets**:
@@ -121,21 +150,21 @@ recommended) so the RBAC story below applies identically.
 
 ## Private networking extension points
 
-This PoC is deliberately deployed with **public network access enabled** for demo simplicity (see
-[demo-script.md](demo-script.md#poc-shortcuts-vs-production-hardening)). The architecture leaves
-clear extension points for customers who require private networking:
+Environment parameters retain **public network access enabled** during the shared-runner
+transition (see [demo-script.md](demo-script.md#poc-shortcuts-vs-production-hardening)).
+The runner's private path is deployed independently; further hardening requires validating
+all clients and runtime paths:
 
 - **Managed VNet for Synapse**: `infra/` parameters include a toggle to enable Synapse's managed
   VNet and managed private endpoints to storage/Key Vault; disabled by default in the PoC config.
-- **Private endpoints**: the storage account and Key Vault modules accept an optional private
-  endpoint subnet/resource ID; when omitted, public network access is used.
+- **Private endpoints**: the shared runner connectivity template provides Storage and Synapse
+  private endpoints. Key Vault private connectivity is not added by that template.
 - **Self-hosted integration runtime**: for on-premises or private source connectivity, the
   `synapse/` linked service definitions are structured so a self-hosted IR can be substituted for
   the Azure IR without changing pipeline/dataset definitions.
-- **Pipeline agents**: GitHub Actions self-hosted runners or Azure DevOps self-hosted agents (or
-  Microsoft-hosted agents with a private-link-enabled service connection) are required if the
-  target resources are fully private, since Microsoft/GitHub-hosted agents need network line of
-  sight to deploy. This is called out explicitly in the runbook troubleshooting section.
+- **Pipeline agents**: GitHub deployment jobs use the shared Windows runner. Azure DevOps needs
+  an independently network-connected agent for private data-plane access; an ARM service
+  connection alone does not provide network line of sight.
 
-Enabling any of the above is out of scope for the PoC deployment itself but does not require
-restructuring the repository layout.
+Disabling public access and hardening runtime-to-storage/Key Vault paths are separate from
+establishing the runner's private endpoint connectivity.

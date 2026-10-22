@@ -13,7 +13,7 @@ Missing items are the most common cause of delay on day-of deployment.
       resource-group deployments; it does **not** create the resource group.
 - [ ] Confirmation the subscription has the following **resource providers registered**:
       `Microsoft.Synapse`, `Microsoft.Storage`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`,
-      `Microsoft.Insights`, `Microsoft.ManagedIdentity`.
+      `Microsoft.Insights`, `Microsoft.ManagedIdentity`, `Microsoft.Compute`, `Microsoft.Network`.
 - [ ] Naming convention / prefix the customer wants reflected in resource names (used to populate
       `infra/parameters/<env>.bicepparam`).
 - [ ] Preferred Azure **region** (must support Synapse and align with any data residency
@@ -24,6 +24,7 @@ Missing items are the most common cause of delay on day-of deployment.
 | Resource | Before the infrastructure pipeline | Before the Synapse artifact pipeline |
 |---|---|---|
 | Azure subscription and target resource group | Must already exist; required providers must be registered | Must exist and contain the deployed workspace |
+| Shared Windows GitHub runner | Shared resource group, OIDC and GitHub App configuration must exist; Deploy bootstraps the runner before environment jobs | Runner must be online and environment private connectivity must already be deployed |
 | Entra App Registration, service principal, and federated credential | Must be configured with the deployment permissions below | Must be configured for the publishing identity, with workspace and storage data-plane permissions |
 | Synapse workspace and its system-assigned managed identity | Created by the infrastructure template; do not manually pre-create for a new environment | Must already exist; run infrastructure deployment first |
 | ADLS Gen2 storage account and filesystems | Template creates the account, workspace default filesystem, and `raw`/`curated` filesystems | Must already exist; publication uploads sample data into `raw` |
@@ -69,17 +70,17 @@ assignments are bootstrap prerequisites, not resources created by this template.
 
 | Name | Where to obtain the value | Required GitHub configuration in the current workflows |
 |---|---|---|
-| `AZURE_CLIENT_ID` | App Registration > Overview > Application (client) ID | Environment **secret** for infrastructure deployment; environment **variable** for artifact publication |
-| `AZURE_TENANT_ID` | App Registration > Overview > Directory (tenant) ID | Environment **secret** for infrastructure deployment; environment **variable** for artifact publication |
-| `AZURE_SUBSCRIPTION_ID` | Azure subscription > Overview > Subscription ID | Environment **secret** for infrastructure deployment; environment **variable** for artifact publication |
+| `AZURE_CLIENT_ID` | App Registration > Overview > Application (client) ID | Environment **secret** for deployment and artifact publication |
+| `AZURE_TENANT_ID` | App Registration > Overview > Directory (tenant) ID | Environment **secret** for deployment and artifact publication |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription > Overview > Subscription ID | Environment **secret** for deployment and artifact publication |
 | `AZURE_RESOURCE_GROUP` | Existing target resource group name | Environment **variable** for both pipelines |
 | `SYNAPSE_WORKSPACE_NAME` | Infrastructure deployment output `synapseWorkspaceName` | Environment **variable** for both pipelines; must match the template-generated name |
 | `SYNAPSE_SQL_ADMIN_PASSWORD` | Customer-provided SQL administrator password meeting Synapse password requirements | Environment **secret** for infrastructure deployment |
 
-The Azure identifiers are not credentials, but the current
-[infrastructure workflow](../.github/workflows/deploy-environment.yml) reads them from
-`secrets`, while the [artifact workflow](../.github/workflows/publish-artifacts-environment.yml)
-reads them from `vars`. When using both, configure the same values in **both** locations.
+The Azure identifiers are not credentials, but both the
+[infrastructure workflow](../.github/workflows/deploy-environment.yml) and
+[artifact workflow](../.github/workflows/publish-artifacts-environment.yml) read them from
+`secrets`, with the environment-prefixed repository-secret fallback below.
 GitHub secrets and variables are separate: setting one does not populate the other. Missing
 client/tenant values cause `azure/login` to fail before federation or RBAC is checked.
 No Azure client secret is needed or should be created.
@@ -109,8 +110,8 @@ the corresponding repository secret prefixed with the target environment:
       test/prod unless their resource-group/workspace configuration is separately supported.
 
 The fallback applies to infrastructure deployment and rollback, including SQL administrator
-password injection. Artifact publication still reads Azure identifiers from `vars` and requires
-its own variable configuration. Repository fallback values are explicitly forwarded by callers;
+password injection, and to artifact publication/rollback Azure identifiers.
+Repository fallback values are explicitly forwarded by callers;
 the reusable workflow does not automatically receive all repository secrets.
 
 ### Azure DevOps configuration
@@ -150,6 +151,31 @@ Grant resource-specific and data-plane permissions at the narrower scopes listed
       storage access to the **workspace managed identity**, not to the pipeline identity.
 
 ## 4. Network and firewall
+
+GitHub deployment/publication now requires the shared Windows runner. Before the first
+infrastructure promotion:
+
+- Have an administrator create a dedicated shared resource group in West US 3.
+- Configure the protected GitHub `runner` Environment, its OIDC identity, GitHub App credentials,
+  VM admin secret, and repository variables described in the
+  [shared runner procedure](deployment-runbook.md#shared-windows-jumpbox-and-github-runner).
+- Approve non-overlapping shared VNet/subnet CIDRs, Basic Bastion public access, NAT egress, and
+  private endpoints targeting all environments. No public IP is assigned to the VM.
+- Grant the bootstrap identity Contributor on the shared resource group, plus subscription
+  metadata reads for VM SKU and regional quota checks. Grant each environment deployment identity
+  permission to deploy/read the connectivity deployment, join the shared endpoint subnet and
+  private DNS zones, create private endpoints/zone groups/NICs, and approve endpoint connections
+  on its target Storage/Synapse resources. Shared-RG Contributor is a PoC alternative to a
+  narrower custom connectivity role, but includes VM administration and weakens isolation.
+- Grant human jumpbox users the required Bastion/VM/NIC Reader permissions and provide the local
+  VM credentials through an approved secret channel. Basic Bastion uses browser RDP; native
+  client/tunneling features require a different Bastion SKU.
+- Allow outbound HTTPS to GitHub, Actions artifact/log/download endpoints (including redirected
+  release assets), Entra ID, Azure Resource Manager, and Microsoft installer/update endpoints.
+  NAT Gateway is not an application firewall. If enterprise policy restricts these destinations,
+  obtain the required egress exceptions before bootstrap.
+- Keep untrusted PRs on GitHub-hosted agents. A persistent runner shared across dev/test/prod
+  does not provide strong environment isolation; protect main and restrict deployment access.
 
 - [ ] Confirm whether **public network access** is acceptable for the PoC (default assumption —
       see [demo-script.md](demo-script.md#poc-shortcuts-vs-production-hardening)) or whether

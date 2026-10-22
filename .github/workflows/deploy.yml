@@ -29,6 +29,13 @@ on:
       - infra/**
       - .github/workflows/deploy.yml
       - .github/workflows/deploy-environment.yml
+      - .github/workflows/deploy-runner.yml
+      - scripts/Deploy-SharedRunner.ps1
+      - scripts/Initialize-GitHubRunner.ps1
+      - scripts/Register-GitHubRunner.ps1
+      - scripts/Invoke-RunnerManagedCommand.ps1
+      - scripts/Set-SynapsePrivateConnectivity.ps1
+      - scripts/Test-RunnerPrivateConnectivity.ps1
       - scripts/Common.psm1
       - scripts/Deploy-SynapseWorkspace.ps1
       - scripts/New-SynapseReleasePackage.ps1
@@ -45,6 +52,19 @@ permissions:
   contents: read
 
 jobs:
+  runner:
+    name: Bootstrap shared Windows runner
+    uses: ./.github/workflows/deploy-runner.yml
+    secrets:
+      RUNNER_AZURE_CLIENT_ID: ${{ secrets.RUNNER_AZURE_CLIENT_ID }}
+      RUNNER_AZURE_TENANT_ID: ${{ secrets.RUNNER_AZURE_TENANT_ID }}
+      RUNNER_AZURE_SUBSCRIPTION_ID: ${{ secrets.RUNNER_AZURE_SUBSCRIPTION_ID }}
+      RUNNER_ADMIN_PASSWORD: ${{ secrets.RUNNER_ADMIN_PASSWORD }}
+      RUNNER_APP_PRIVATE_KEY: ${{ secrets.RUNNER_APP_PRIVATE_KEY }}
+    permissions:
+      id-token: write
+      contents: read
+
   package:
     name: Build immutable infra release package
     runs-on: ubuntu-latest
@@ -83,7 +103,7 @@ jobs:
 
   deploy-dev:
     name: Deploy (dev)
-    needs: package
+    needs: [package, runner]
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: dev

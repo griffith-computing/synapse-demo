@@ -74,8 +74,10 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     name: ${{ inputs.is-rollback && 'Rollback' || 'Deploy' }} (${{ inputs.environment }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64, synapse-private]
+    timeout-minutes: 90
     environment: ${{ inputs.environment }}
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || secrets.repository_AZURE_CLIENT_ID }}
@@ -168,3 +170,27 @@ jobs:
             -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID"
         env:
           SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD || secrets.repository_SYNAPSE_SQL_ADMIN_PASSWORD }}
+
+      - name: Ensure private endpoints and DNS
+        shell: pwsh
+        env:
+          RUNNER_RESOURCE_GROUP: ${{ vars.RUNNER_RESOURCE_GROUP }}
+          ENVIRONMENT_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          WORKSPACE_NAME: ${{ vars.SYNAPSE_WORKSPACE_NAME }}
+        run: |
+          ./scripts/Set-SynapsePrivateConnectivity.ps1 -RunnerResourceGroup $env:RUNNER_RESOURCE_GROUP `
+            -EnvironmentResourceGroup $env:ENVIRONMENT_RESOURCE_GROUP `
+            -EnvironmentName $env:DEPLOYMENT_ENVIRONMENT -WorkspaceName $env:WORKSPACE_NAME
+
+      - name: Verify environment private path
+        shell: pwsh
+        env:
+          WORKSPACE_NAME: ${{ vars.SYNAPSE_WORKSPACE_NAME }}
+          ENVIRONMENT_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+        run: |
+          $json = az synapse workspace show -g $env:ENVIRONMENT_RESOURCE_GROUP -n $env:WORKSPACE_NAME -o json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the deployed workspace.' }
+          $workspace = $json | ConvertFrom-Json
+          $storageName = ([Uri]$workspace.defaultDataLakeStorage.accountUrl).Host.Split('.')[0]
+          ./scripts/Test-RunnerPrivateConnectivity.ps1 -StorageAccountName $storageName -WorkspaceName $env:WORKSPACE_NAME

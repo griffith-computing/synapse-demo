@@ -85,8 +85,8 @@ Perform once per environment (dev/test/prod), for whichever platform(s) you use.
      environment-prefixed repository secret, e.g. `dev_AZURE_CLIENT_ID`. Configure these under
      **Settings > Secrets and variables > Actions > Repository secrets**. The calling workflows
      explicitly forward only the matching environment's fallback secrets.
-   - Environment **variables** with those same names and values for the artifact publication
-     workflow, which reads `vars`. When running both pipelines, configure both locations.
+   - The artifact publication and rollback workflows use the same environment secrets and
+     matching environment-prefixed repository-secret fallbacks.
    - These values are identifiers, not credentials; a client secret is never created or stored.
 4. Workflows in `.github/workflows/` use `azure/login@v2` with `client-id`/`tenant-id`/
    `subscription-id` inputs and `permissions: id-token: write` at the job level to request the
@@ -132,6 +132,148 @@ artifact publication access. Grant **Storage Blob Data Contributor** on the PoC 
 the artifact pipeline can seed the packaged raw sample CSV.
 
 ## Environment configuration
+
+### Shared Windows jumpbox and GitHub runner
+
+GitHub deploy/publish/rollback execution requires one shared Windows runner. Packaging, PR
+validation, and shared bootstrap stay GitHub-hosted. Azure DevOps agent selection is unchanged.
+Run from protected `main`; configure environment deployment-branch restrictions and required
+reviewers for `runner`, `dev`, `test`, and `prod`. The shared runner is for trusted code only.
+Do not add PR jobs or fork checkouts to it. Environment approval is not VM-level isolation.
+
+#### One-time configuration
+
+1. Have an administrator create a dedicated shared resource group in West US 3 and register
+   `Microsoft.Compute` and `Microsoft.Network`. The workflow deliberately does not create the
+   resource group or grant itself permissions.
+2. Create a shared-infrastructure Entra service principal with a GitHub OIDC federated credential
+   matching the `runner` GitHub Environment. Grant Contributor on the shared resource group and
+   subscription-level reads for `Microsoft.Compute/skus/read` and
+   `Microsoft.Compute/locations/usages/read` (or an approved metadata-reader role).
+3. Create/install a GitHub App on this repository with **Repository permissions >
+   Administration: Read and write**. Store its private key in GitHub, not Azure or the VM.
+   Ordinary `GITHUB_TOKEN` cannot create repository-runner registration tokens.
+4. Configure these settings:
+
+   | Setting | Location |
+   | --- | --- |
+   | `RUNNER_RESOURCE_GROUP` | Repository Actions variable; shared resource group name |
+   | `RUNNER_APP_ID` | Repository Actions variable; GitHub App ID |
+   | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | `runner` Environment secrets; alternatively repository secrets `RUNNER_AZURE_CLIENT_ID`, `RUNNER_AZURE_TENANT_ID`, `RUNNER_AZURE_SUBSCRIPTION_ID` |
+   | `RUNNER_ADMIN_PASSWORD` | `runner` Environment secret or repository secret; strong local Windows administrator password |
+   | `RUNNER_APP_PRIVATE_KEY` | `runner` Environment secret or repository secret; GitHub App PEM private key |
+   | `RUNNER_VM_SIZE` | Optional repository variable; defaults to `Standard_B2as_v2` |
+   | `RUNNER_ADMIN_USERNAME` | Optional repository variable; defaults to `runneradmin` |
+   | `RUNNER_VNET_CIDR` | Optional repository variable; defaults to `10.42.0.0/16` |
+   | `RUNNER_BASTION_CIDR` | Optional repository variable; defaults to `10.42.0.0/26` |
+   | `RUNNER_SUBNET_CIDR` | Optional repository variable; defaults to `10.42.1.0/24` |
+   | `RUNNER_ENDPOINT_CIDR` | Optional repository variable; defaults to `10.42.2.0/24` |
+
+   Approve CIDRs before the first deployment. `AzureBastionSubnet` must be /26 or larger.
+   Do not change existing subnet address ranges without a separate network migration.
+5. Grant each environment deployment identity permissions for the shared connectivity deployment:
+   deployment read/write, private endpoint and zone-group create/read/write, subnet join,
+   DNS-zone join and any endpoint-created NIC operations. Also allow endpoint connection approval
+   on its environment's Storage/Synapse resources. A dedicated custom role is preferable;
+   Contributor on the shared RG is simpler for a PoC but grants VM control as well.
+6. Retain each publishing identity's **Storage Blob Data Contributor** and **Synapse Artifact
+   Publisher** assignments. A runner's network location does not grant either permission.
+
+#### Deployment and recovery
+
+Run [Deploy shared runner](../.github/workflows/deploy-runner.yml) manually from main for initial
+bootstrap or recovery. [Deploy](../.github/workflows/deploy.yml) also calls it before scheduling
+dev deployment; packaging runs independently. A failed bootstrap prevents promotion.
+
+The shared deployment is named `shared-runner`; keep that name because connectivity resolves its
+outputs. It uses [the shared template](../infra/runner/main.bicep), not environment parameter files.
+Shared what-if precedes deployment. SKU restrictions and regional/family quota are checked again,
+but passing those checks does not guarantee instantaneous Azure allocation capacity.
+
+Prerequisites are installed by [Initialize-GitHubRunner.ps1](../scripts/Initialize-GitHubRunner.ps1).
+PowerShell/Git/runner downloads use official release metadata and SHA256 asset digests; the
+Azure CLI installer requires a valid Microsoft Authenticode signature. A missing digest or
+invalid signature is an error, not a bypass. Bicep is made available to the service account.
+Review version changes as part of maintenance; bootstrap uses current stable release metadata.
+
+The workflow mints the registration token only after installation. It sends that token using
+Azure **managed** Run Command `protectedParameters`, never ordinary parameters or template
+outputs. Hosted temporary payloads are removed in `finally`; completed Run Command resources
+are deleted. Failed command resources are retained for diagnosis. Never echo protected payloads
+or upload them as artifacts. Only trusted administrators should have VM Run Command permission.
+
+Registration runs the service as `NT AUTHORITY\NETWORK SERVICE`, with modify access to
+`C:\actions-runner`. Existing matching registration is reused and its stopped service restarted;
+mismatched/broken registration fails explicitly. Runner updates remain enabled. The workflow
+checks GitHub status is online with `synapse-private`, not just that Azure reports VM success.
+For an abandoned registration after VM replacement, remove the stale runner in repository
+**Settings > Actions > Runners** before retrying; do not silently replace another runner.
+
+Each environment deployment subsequently applies
+[connectivity.bicep](../infra/runner/connectivity.bicep) into the shared RG, using the workspace's
+actual default data lake resource ID. Endpoint deployments are named `connectivity-dev`,
+`connectivity-test`, and `connectivity-prod`; DNS zones and links are shared and owned only by
+the bootstrap template. Target regions are preserved, including checked-in East US 2 test/prod.
+The private-connectivity control plane uses the currently checked-out shared orchestration,
+including during environment rollback; environment rollback does not roll back the shared VM,
+network, or connectivity template. Environment Bicep/artifacts remain immutable packages.
+
+Deploy the infrastructure stream before starting the independently triggered artifact stream.
+Publication checks private DNS and TCP for Storage blob/dfs and Synapse Dev before uploading.
+If the runner is offline, jobs wait in GitHub's runner queue; rerun hosted bootstrap rather
+than waiting for a self-hosted job to repair itself. Job execution timeouts do not bound GitHub's
+runner queue wait.
+
+#### Bastion, networking and acceptance checks
+
+- Open the VM in Azure Portal, choose **Connect > Bastion**, and use the approved local VM
+  credentials. Basic provides browser RDP; no VM public IP or public RDP rule exists.
+- NAT Gateway provides explicit outbound access. Permit GitHub/Actions artifact/log/release
+  endpoints and redirects, Entra ID, Azure management, Microsoft installers and Windows updates.
+  NAT is not an egress-filtering firewall. Follow the current
+  [GitHub domain requirements](https://docs.github.com/en/actions/reference/runners/self-hosted-runners#communication)
+  when enterprise filtering is applied.
+- On the VM, check the `actions.runner.*` service and GitHub's online runner status. Then run:
+
+  ```powershell
+  .\scripts\Test-RunnerPrivateConnectivity.ps1 `
+    -StorageAccountName '<actual-account>' -WorkspaceName '<actual-workspace>' -IncludeSql
+  ```
+
+  Repeat for dev/test/prod. The command rejects public DNS results and checks TCP reachability;
+  deployment/publication then verifies actual authorized operations. Check private endpoint
+  approval, zone groups and VNet links if DNS is public or connections fail.
+- Validate a real infrastructure deployment, raw seed upload, Synapse publication, smoke tests,
+  and a redeployment/recovery path. Verify environment approval gates and that PR validation is
+  still GitHub-hosted. Record these live results separately; offline tests cannot prove them.
+- Do not disable public access merely because these runner tests pass. Synapse runtime-to-storage
+  access, other users/tools, and any Key Vault dependencies need their own validation first.
+- Keep the VM running for unattended jobs. If explicitly deallocated for savings, restart it
+  before queuing work. VM deallocation does not stop Bastion, NAT or private endpoint charges.
+  Operators own OS updates, reboots and runner maintenance; drain the runner before maintenance.
+
+#### West US 3 sizing and cost
+
+The selected `Standard_B2as_v2` has 2 vCPU / 8 GiB and Windows retail Consumption pricing of
+USD **0.0844/hour**, verified through the Azure Retail Prices API. It is appropriate for
+intermittent PowerShell/Azure CLI deployments, not heavy builds. B-series CPU credits limit
+sustained load; resize to `Standard_D2as_v5` if continuous work makes that a problem.
+
+| Checked size | vCPU / RAM | Windows USD/hour |
+| --- | --- | ---: |
+| Standard_B2als_v2 | 2 / 4 GiB | 0.0468 |
+| Standard_B2s | 2 / 4 GiB | 0.0496 |
+| Standard_B2as_v2 | 2 / 8 GiB | 0.0844 |
+| Standard_B2ms | 2 / 8 GiB | 0.0912 |
+| Standard_D2as_v5 | 2 / 8 GiB | 0.1780 |
+| Standard_D2s_v5 | 2 / 8 GiB | 0.1880 |
+
+All six were listed without subscription restrictions and with sufficient family quota in the
+selected subscription when checked. This is not an allocation guarantee or a fixed-price quote.
+Basic Bastion adds USD **0.19/hour** while provisioned, making VM + Bastion USD **0.2744/hour**
+before disk, NAT Gateway/processing, Standard public IPs, private endpoints/processing and traffic
+(including cross-region traffic). Confirm current rates/discounts in the
+[Azure Pricing Calculator](https://azure.microsoft.com/pricing/calculator/).
 
 Each environment has an infrastructure parameter file and an artifact override file:
 

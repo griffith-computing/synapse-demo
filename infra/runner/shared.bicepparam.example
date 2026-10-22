@@ -1,0 +1,12 @@
+using './main.bicep'
+
+param location = 'westus3'
+param vmSize = 'Standard_B2as_v2'
+param adminUsername = 'runneradmin'
+param adminPassword = readEnvironmentVariable('RUNNER_ADMIN_PASSWORD')
+
+// Change the CIDRs before deployment if these overlap enterprise networks.
+param vnetAddressPrefix = '10.42.0.0/16'
+param bastionSubnetPrefix = '10.42.0.0/26'
+param runnerSubnetPrefix = '10.42.1.0/24'
+param endpointSubnetPrefix = '10.42.2.0/24'

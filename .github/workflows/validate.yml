@@ -43,3 +43,17 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/Test-SynapseRepository.ps1 -RepositoryRoot "${{ github.workspace }}" -RequiredPaths infra,synapse,config,scripts -ConfigFiles config/dev.json,config/test.json,config/prod.json -Offline
+
+      - name: Compile runner infrastructure
+        shell: pwsh
+        run: |
+          foreach ($template in @('infra/runner/main.bicep', 'infra/runner/connectivity.bicep')) {
+            az bicep build --file $template --outfile "$env:RUNNER_TEMP/$([IO.Path]::GetFileNameWithoutExtension($template)).json"
+            if ($LASTEXITCODE -ne 0) { throw "Bicep compilation failed: $template" }
+          }
+
+      - name: Validate runner orchestration and topology
+        shell: pwsh
+        run: |
+          ./tests/Test-RunnerInfrastructure.ps1 -CompiledRunnerTemplate "$env:RUNNER_TEMP/main.json" `
+            -CompiledConnectivityTemplate "$env:RUNNER_TEMP/connectivity.json"
