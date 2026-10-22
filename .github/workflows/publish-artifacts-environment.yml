@@ -18,6 +18,13 @@ on:
         description: Expected version encoded in the package manifest
         required: true
         type: string
+    secrets:
+      repository_AZURE_CLIENT_ID:
+        required: false
+      repository_AZURE_TENANT_ID:
+        required: false
+      repository_AZURE_SUBSCRIPTION_ID:
+        required: false
 
 permissions:
   id-token: write
