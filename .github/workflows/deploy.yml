@@ -60,6 +60,7 @@ jobs:
       RUNNER_AZURE_TENANT_ID: ${{ secrets.RUNNER_AZURE_TENANT_ID }}
       RUNNER_AZURE_SUBSCRIPTION_ID: ${{ secrets.RUNNER_AZURE_SUBSCRIPTION_ID }}
       RUNNER_ADMIN_PASSWORD: ${{ secrets.RUNNER_ADMIN_PASSWORD }}
+      # PEM setup and runner Environment override: docs/deployment-runbook.md#set-the-runner-github-app-private-key
       RUNNER_APP_PRIVATE_KEY: ${{ secrets.RUNNER_APP_PRIVATE_KEY }}
     permissions:
       id-token: write

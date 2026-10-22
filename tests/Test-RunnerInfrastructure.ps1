@@ -159,6 +159,14 @@ try {
     $bootstrap = Get-Content (Join-Path $root '.github\workflows\deploy-runner.yml') -Raw
     Assert-RunnerTest ($bootstrap -match 'runs-on: ubuntu-latest') 'Bootstrap depends on its own runner.'
     Assert-RunnerTest ($bootstrap.IndexOf('Install Windows runner prerequisites') -lt $bootstrap.IndexOf('Create repository administration token')) 'Registration token is minted before prerequisite installation.'
+    $resolution = 'RUNNER_RESOURCE_GROUP: ${{ vars.RUNNER_RESOURCE_GROUP }}'
+    Assert-RunnerTest ($bootstrap.Contains($resolution)) 'Bootstrap does not read the runner resource group directly from GitHub variables.'
+    Assert-RunnerTest ($bootstrap -notmatch 'runner-resource-group') 'Bootstrap still exposes runner resource group input/output plumbing.'
+    $promotion = Get-Content (Join-Path $root '.github\workflows\deploy.yml') -Raw
+    Assert-RunnerTest ($promotion -notmatch 'runner-resource-group') 'Deploy still exposes or forwards a runner resource group input.'
+    $environmentWorkflow = Get-Content (Join-Path $root '.github\workflows\deploy-environment.yml') -Raw
+    Assert-RunnerTest ($environmentWorkflow -notmatch 'runner-resource-group') 'Environment deployment still accepts a runner resource group input.'
+    Assert-RunnerTest ($environmentWorkflow.Contains($resolution)) 'Private connectivity does not read the runner resource group directly from GitHub variables.'
     $validation = Get-Content (Join-Path $root '.github\workflows\validate.yml') -Raw
     Assert-RunnerTest ($validation -match 'runs-on: ubuntu-latest' -and $validation -notmatch 'runs-on: \[self-hosted') 'PR validation moved onto the trusted runner.'
 

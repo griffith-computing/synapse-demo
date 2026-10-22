@@ -152,12 +152,13 @@ Do not add PR jobs or fork checkouts to it. Environment approval is not VM-level
    `Microsoft.Compute/locations/usages/read` (or an approved metadata-reader role).
 3. Create/install a GitHub App on this repository with **Repository permissions >
    Administration: Read and write**. Store its private key in GitHub, not Azure or the VM.
-   Ordinary `GITHUB_TOKEN` cannot create repository-runner registration tokens.
+   Ordinary `GITHUB_TOKEN` cannot create repository-runner registration tokens. Follow
+   [Set the runner GitHub App private key](#set-the-runner-github-app-private-key) below.
 4. Configure these settings:
 
    | Setting | Location |
    | --- | --- |
-   | `RUNNER_RESOURCE_GROUP` | Repository Actions variable; shared resource group name |
+   | `RUNNER_RESOURCE_GROUP` | Repository Actions variable (recommended); shared resource group name. Environment variables can override it; use the same value in `runner`, `dev`, `test`, and `prod`. |
    | `RUNNER_APP_ID` | Repository Actions variable; GitHub App ID |
    | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | `runner` Environment secrets; alternatively repository secrets `RUNNER_AZURE_CLIENT_ID`, `RUNNER_AZURE_TENANT_ID`, `RUNNER_AZURE_SUBSCRIPTION_ID` |
    | `RUNNER_ADMIN_PASSWORD` | `runner` Environment secret or repository secret; strong local Windows administrator password |
@@ -179,11 +180,88 @@ Do not add PR jobs or fork checkouts to it. Environment approval is not VM-level
 6. Retain each publishing identity's **Storage Blob Data Contributor** and **Synapse Artifact
    Publisher** assignments. A runner's network location does not grant either permission.
 
+#### Set the runner GitHub App private key
+
+`RUNNER_APP_PRIVATE_KEY` is the private key of the GitHub App used to register this repository's
+self-hosted runner. It is **not** an Azure credential, an SSH key, the App's client secret, or a
+runner registration token. The bootstrap workflow uses it with `RUNNER_APP_ID` to create a
+short-lived installation access token, then requests a runner registration token. The App
+private key stays in GitHub Actions; only the registration token is sent to the VM.
+
+1. Open the App owner's GitHub **Settings > Developer settings > GitHub Apps** (use organization
+   settings for an organization-owned App). Create a dedicated App if needed, or select **Edit**
+   on the existing runner App. A runner-only App does not need an active webhook; disable
+   **Active** under Webhook if creating one without a webhook receiver.
+2. Under **Permissions & events > Repository permissions**, set **Administration** to
+   **Read and write** and save. Under **Install App**, install the App on the repository's
+   owner account and select **Only select repositories**, including this repository. If changing
+   an existing installation's permissions, have its owner approve the new permissions.
+3. On the App's **General** page, copy the **App ID** (not the Client ID). In this repository,
+   open **Settings > Secrets and variables > Actions > Variables > New repository variable**.
+   Set `RUNNER_APP_ID` to that ID.
+4. Return to the App's **General > Private keys** section and select **Generate a private key**.
+   GitHub downloads a `.pem` file. Treat this file as a credential: do not commit it, paste it
+   into workflow YAML, or put it on the runner VM.
+5. Store the **entire contents** of the downloaded PEM file as an Actions **secret**, preserving
+   its line breaks and the `-----BEGIN RSA PRIVATE KEY-----` and
+   `-----END RSA PRIVATE KEY-----` lines. Do not base64-encode it, surround it with quotes, or
+   replace line breaks with literal `\n` text. Choose one location:
+   - **Recommended:** repository **Settings > Environments > runner > Environment secrets >
+     Add environment secret**, named `RUNNER_APP_PRIVATE_KEY`. This makes the key available to
+     the bootstrap job after the protected `runner` Environment's approval rules are satisfied.
+   - **Repository fallback:** **Settings > Secrets and variables > Actions > Secrets >
+     New repository secret**, with the same name, `RUNNER_APP_PRIVATE_KEY`.
+
+   The caller in [deploy.yml](../.github/workflows/deploy.yml) passes the repository secret:
+
+   ```yaml
+   RUNNER_APP_PRIVATE_KEY: ${{ secrets.RUNNER_APP_PRIVATE_KEY }}
+   ```
+
+   Leave that expression unchanged; it references the stored secret rather than containing the
+   key itself. The reusable [deploy-runner.yml](../.github/workflows/deploy-runner.yml) declares
+   `environment: runner`, so a secret defined on that Environment takes precedence over the
+   passed repository secret. An Environment-only key is supported; it does not need to be
+   duplicated as a repository secret. Do not put it on `dev`, `test`, or `prod`, since those
+   Environments are not used by the bootstrap job.
+6. Run **Actions > Deploy shared runner > Run workflow** from `main`, approve the `runner`
+   Environment if required, and verify that **Create repository administration token** and
+   **Register Windows runner service** succeed. Confirm the runner is online in repository
+   **Settings > Actions > Runners** with the `synapse-private` label.
+
+If **Validate bootstrap configuration** reports a missing `RUNNER_APP_PRIVATE_KEY`, check the
+secret's exact name and scope above. If token creation fails, check that `RUNNER_APP_ID` matches
+the App that generated the key, the full PEM was saved, the App is installed on this repository,
+and its Administration permission has been approved. Never print the key to troubleshoot it.
+
+To rotate the key, generate another private key for the same App, update the secret in the
+location used by the bootstrap job, and verify a successful bootstrap before deleting the old
+key from the App's **Private keys** list. If both Environment and repository secrets exist,
+update or remove the unused copy to avoid a stale fallback. Handle the downloaded file using
+your organization's credential-storage policy and remove any unneeded local copy.
+
+See GitHub's [private-key management documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps)
+for key generation and revocation guidance.
+
 #### Deployment and recovery
 
 Run [Deploy shared runner](../.github/workflows/deploy-runner.yml) manually from main for initial
 bootstrap or recovery. [Deploy](../.github/workflows/deploy.yml) also calls it before scheduling
 dev deployment; packaging runs independently. A failed bootstrap prevents promotion.
+
+The runner resource group is read directly from `${{ vars.RUNNER_RESOURCE_GROUP }}`, not a
+workflow input. Set it under repository **Settings > Secrets and variables > Actions >
+Variables > New repository variable**, named `RUNNER_RESOURCE_GROUP`, with the existing shared
+resource group name as its value. This supplies the same default to bootstrap, promotion,
+and rollback.
+
+Environment-scoped variables take precedence over the repository variable. Bootstrap uses the
+protected `runner` Environment; private-connectivity deployment and rollback use the target
+`dev`, `test`, or `prod` Environment. If using Environment variables instead, configure
+`RUNNER_RESOURCE_GROUP` with the same shared resource group name in all four Environments under
+**Settings > Environments > [environment] > Environment variables**. Setting it only on
+`runner` does not make it available to the other Environments. Bootstrap fails its configuration
+check before Azure deployment if the variable is missing.
 
 The shared deployment is named `shared-runner`; keep that name because connectivity resolves its
 outputs. It uses [the shared template](../infra/runner/main.bicep), not environment parameter files.
