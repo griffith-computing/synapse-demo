@@ -82,9 +82,9 @@ jobs:
       - name: Azure login (OIDC / workload identity federation)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve workspace publication endpoints
         id: workspace
@@ -93,7 +93,7 @@ jobs:
           $workspaceJson = az synapse workspace show `
             --name "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" `
-            --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            --subscription "$env:AZURE_SUBSCRIPTION_ID" `
             --output json
           if ($LASTEXITCODE -ne 0 -or -not $workspaceJson) {
             throw "Synapse workspace '${{ vars.SYNAPSE_WORKSPACE_NAME }}' was not found. Deploy infrastructure before publishing artifacts."
@@ -128,7 +128,7 @@ jobs:
             -ArtifactsRoot "${{ github.workspace }}/package-extracted/synapse" `
             -ConfigFile "${{ github.workspace }}/package-extracted/config/${{ inputs.environment }}.json" `
             -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
-            -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+            -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID" `
             -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=${{ steps.workspace.outputs.storage-dfs-endpoint }}"
 
       - name: Resolve smoke tests
