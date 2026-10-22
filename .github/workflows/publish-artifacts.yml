@@ -73,11 +73,10 @@ jobs:
       environment: dev
       artifact-name: ${{ needs.package.outputs.artifact-name }}
       package-version: ${{ needs.package.outputs.version }}
-      secrets:
-        repository_AZURE_CLIENT_ID: ${{ secrets.dev_AZURE_CLIENT_ID }}
-        repository_AZURE_TENANT_ID: ${{ secrets.dev_AZURE_TENANT_ID }}
-        repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.dev_AZURE_SUBSCRIPTION_ID }}
-        repository_SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.dev_SYNAPSE_SQL_ADMIN_PASSWORD }}
+    secrets:
+      repository_AZURE_CLIENT_ID: ${{ secrets.dev_AZURE_CLIENT_ID }}
+      repository_AZURE_TENANT_ID: ${{ secrets.dev_AZURE_TENANT_ID }}
+      repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.dev_AZURE_SUBSCRIPTION_ID }}
     permissions:
       id-token: write
       contents: read
@@ -90,11 +89,10 @@ jobs:
       environment: test
       artifact-name: ${{ needs.package.outputs.artifact-name }}
       package-version: ${{ needs.package.outputs.version }}
-      secrets:
-        repository_AZURE_CLIENT_ID: ${{ secrets.test_AZURE_CLIENT_ID }}
-        repository_AZURE_TENANT_ID: ${{ secrets.test_AZURE_TENANT_ID }}
-        repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.test_AZURE_SUBSCRIPTION_ID }}
-        repository_SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.test_SYNAPSE_SQL_ADMIN_PASSWORD }}
+    secrets:
+      repository_AZURE_CLIENT_ID: ${{ secrets.test_AZURE_CLIENT_ID }}
+      repository_AZURE_TENANT_ID: ${{ secrets.test_AZURE_TENANT_ID }}
+      repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.test_AZURE_SUBSCRIPTION_ID }}
     permissions:
       id-token: write
       contents: read
@@ -107,11 +105,10 @@ jobs:
       environment: prod
       artifact-name: ${{ needs.package.outputs.artifact-name }}
       package-version: ${{ needs.package.outputs.version }}
-      secrets:
-        repository_AZURE_CLIENT_ID: ${{ secrets.prod_AZURE_CLIENT_ID }}
-        repository_AZURE_TENANT_ID: ${{ secrets.prod_AZURE_TENANT_ID }}
-        repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.prod_AZURE_SUBSCRIPTION_ID }}
-        repository_SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.prod_SYNAPSE_SQL_ADMIN_PASSWORD }}
+    secrets:
+      repository_AZURE_CLIENT_ID: ${{ secrets.prod_AZURE_CLIENT_ID }}
+      repository_AZURE_TENANT_ID: ${{ secrets.prod_AZURE_TENANT_ID }}
+      repository_AZURE_SUBSCRIPTION_ID: ${{ secrets.prod_AZURE_SUBSCRIPTION_ID }}
     permissions:
       id-token: write
       contents: read
