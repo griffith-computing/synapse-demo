@@ -78,12 +78,26 @@ Perform once per environment (dev/test/prod), for whichever platform(s) you use.
      the subject emitted by GitHub for your repository.
      Alternatively use *Branch* (`ref:refs/heads/<branch>`) if environments are not used.
 3. In the GitHub repository settings, create a matching **Environment** named `<env>` (e.g. `dev`,
-   `test`, `prod`) and add repository/environment secrets or variables:
-   - `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (these are identifiers, not
-     secrets — a client secret is never created or stored).
+   `test`, `prod`) and configure:
+   - Environment **secrets** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` for
+     infrastructure deployment. The current infrastructure workflow reads `secrets`, not `vars`.
+   - Environment **variables** with those same names and values for the artifact publication
+     workflow, which reads `vars`. When running both pipelines, configure both locations.
+   - These values are identifiers, not credentials; a client secret is never created or stored.
 4. Workflows in `.github/workflows/` use `azure/login@v2` with `client-id`/`tenant-id`/
    `subscription-id` inputs and `permissions: id-token: write` at the job level to request the
    OIDC token.
+
+If infrastructure login reports that `client-id` or `tenant-id` is missing, inspect the
+**Validate Azure login configuration** step. It reports the repository, target environment,
+workflow commit, run attempt, and whether each required login secret is present, without
+printing secret values. Check secrets in that exact repository/environment, not just repository
+variables or a different environment. Environment secrets are read by the reusable job's
+`environment` binding and do not require `secrets: inherit`; repository secrets would need
+explicit forwarding or inheritance from the calling workflow. Start a new run on the updated
+commit to use workflow changes; re-running an older run does not update its workflow definition.
+If this check passes but login still fails, inspect the new Azure error before changing RBAC or
+federation settings.
 
 ### Azure DevOps
 

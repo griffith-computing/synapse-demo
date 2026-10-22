@@ -93,6 +93,30 @@ jobs:
           if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
           ./scripts/Test-SynapseRepository.ps1 -RepositoryRoot "${{ github.workspace }}" -ArtifactManifestPath $manifest.FullName -ArtifactBasePath (Resolve-Path package-extracted) -Offline
 
+      - name: Validate Azure login configuration
+        shell: pwsh
+        env:
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          Write-Host "Checking Azure login secrets for environment '$env:DEPLOYMENT_ENVIRONMENT' in '$env:GITHUB_REPOSITORY'."
+          Write-Host "Workflow commit: $env:GITHUB_SHA; run attempt: $env:GITHUB_RUN_ATTEMPT"
+          $required = @('AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID')
+          $missing = @()
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              Write-Host "::error::Required environment secret '$name' is missing or empty."
+              $missing += $name
+            } else {
+              Write-Host "${name}: present"
+            }
+          }
+          if ($missing.Count -gt 0) {
+            throw "Azure login configuration is incomplete. Set $($missing -join ', ') under Settings > Environments > $env:DEPLOYMENT_ENVIRONMENT > Environment secrets in $env:GITHUB_REPOSITORY. This workflow reads secrets, not variables."
+          }
+
       - name: Azure login (OIDC / workload identity federation)
         uses: azure/login@v2
         with:
