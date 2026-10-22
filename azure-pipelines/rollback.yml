@@ -55,7 +55,6 @@ stages:
           environmentName: dev
           serviceConnection: $(serviceConnection.dev)
           resourceGroupName: $(resourceGroup.dev)
-          workspaceName: $(workspaceName.dev)
           subscriptionId: $(subscriptionId.dev)
           artifactName: $(releaseArtifactName)
           packageVersion: ${{ parameters.packageVersion }}
@@ -72,7 +71,6 @@ stages:
           environmentName: test
           serviceConnection: $(serviceConnection.test)
           resourceGroupName: $(resourceGroup.test)
-          workspaceName: $(workspaceName.test)
           subscriptionId: $(subscriptionId.test)
           artifactName: $(releaseArtifactName)
           packageVersion: ${{ parameters.packageVersion }}
@@ -89,7 +87,6 @@ stages:
           environmentName: prod
           serviceConnection: $(serviceConnection.prod)
           resourceGroupName: $(resourceGroup.prod)
-          workspaceName: $(workspaceName.prod)
           subscriptionId: $(subscriptionId.prod)
           artifactName: $(releaseArtifactName)
           packageVersion: ${{ parameters.packageVersion }}

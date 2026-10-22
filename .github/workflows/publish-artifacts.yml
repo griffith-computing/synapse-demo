@@ -14,6 +14,7 @@ on:
       - .github/workflows/publish-artifacts.yml
       - .github/workflows/publish-artifacts-environment.yml
       - scripts/Common.psm1
+      - scripts/Get-SynapseDeploymentOutputs.ps1
       - scripts/Invoke-SynapseSmokeTests.ps1
       - scripts/New-SynapseReleasePackage.ps1
       - scripts/Publish-SynapseArtifacts.ps1

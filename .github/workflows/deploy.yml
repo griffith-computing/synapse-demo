@@ -38,6 +38,7 @@ on:
       - scripts/Test-RunnerPrivateConnectivity.ps1
       - scripts/Common.psm1
       - scripts/Deploy-SynapseWorkspace.ps1
+      - scripts/Get-SynapseDeploymentOutputs.ps1
       - scripts/New-SynapseReleasePackage.ps1
       - scripts/Test-SynapseRepository.ps1
   workflow_dispatch: {}

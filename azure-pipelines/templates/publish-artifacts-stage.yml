@@ -14,8 +14,6 @@ parameters:
     type: string
   - name: resourceGroupName
     type: string
-  - name: workspaceName
-    type: string
   - name: subscriptionId
     type: string
   - name: dependsOn
@@ -108,24 +106,10 @@ stages:
                     scriptType: pscore
                     scriptLocation: inlineScript
                     inlineScript: |
-                      $workspaceJson = az synapse workspace show `
-                        --name "${{ parameters.workspaceName }}" `
-                        --resource-group "${{ parameters.resourceGroupName }}" `
-                        --subscription "${{ parameters.subscriptionId }}" `
-                        --output json
-                      if ($LASTEXITCODE -ne 0 -or -not $workspaceJson) {
-                        throw "Synapse workspace '${{ parameters.workspaceName }}' was not found. Deploy infrastructure before publishing artifacts."
-                      }
-
-                      $workspace = $workspaceJson | ConvertFrom-Json
-                      $dfsEndpoint = $workspace.defaultDataLakeStorage.accountUrl
-                      $webEndpoint = $workspace.connectivityEndpoints.web
-                      if (-not $dfsEndpoint) { throw "Workspace defaultDataLakeStorage.accountUrl is empty." }
-                      if (-not $webEndpoint) { $webEndpoint = "https://${{ parameters.workspaceName }}.dev.azuresynapse.net" }
-
-                      Write-Host "##vso[task.setvariable variable=storageDfsEndpoint]$dfsEndpoint"
-                      Write-Host "##vso[task.setvariable variable=workspaceWebEndpoint]$webEndpoint"
-                      Write-Host "##vso[task.setvariable variable=storageAccountName]$(([Uri]$dfsEndpoint).Host.Split('.')[0])"
+                      & "$(Build.SourcesDirectory)/scripts/Get-SynapseDeploymentOutputs.ps1" `
+                        -ResourceGroupName "${{ parameters.resourceGroupName }}" `
+                        -DeploymentName "synapse-${{ parameters.environmentName }}" `
+                        -SubscriptionId "${{ parameters.subscriptionId }}"
                     addSpnToEnvironment: true
 
                 - task: AzureCLI@2
@@ -156,9 +140,9 @@ stages:
                     arguments: >-
                       -ArtifactsRoot "$(Pipeline.Workspace)/artifacts-extracted/synapse"
                       -ConfigFile "$(Pipeline.Workspace)/artifacts-extracted/config/${{ parameters.environmentName }}.json"
-                      -WorkspaceName "${{ parameters.workspaceName }}"
+                      -WorkspaceName "$(synapseWorkspaceName)"
                       -SubscriptionId "${{ parameters.subscriptionId }}"
-                      -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageDfsEndpoint)"
+                      -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageAccountDfsEndpoint)"
                     addSpnToEnvironment: true
 
                 - task: AzureCLI@2
@@ -172,11 +156,11 @@ stages:
                       foreach ($definition in $definitions) {
                         if ($definition.Type -eq 'AzCommand') {
                           for ($index = 0; $index -lt $definition.Command.Count; $index++) {
-                            if ($definition.Command[$index] -eq 'synws') { $definition.Command[$index] = '${{ parameters.workspaceName }}' }
+                            if ($definition.Command[$index] -eq 'synws') { $definition.Command[$index] = '$(synapseWorkspaceName)' }
                             if ($definition.Command[$index] -eq 'sample-pipeline') { $definition.Command[$index] = 'PL_CopyRawToCurated' }
                           }
                         }
-                        if ($definition.Type -eq 'HttpCheck') { $definition.Url = '$(workspaceWebEndpoint)' }
+                        if ($definition.Type -eq 'HttpCheck') { $definition.Url = '$(synapseWebEndpoint)' }
                       }
                       $resolvedPath = "$(Agent.TempDirectory)/synapse-smoke-tests.json"
                       $definitions | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolvedPath -Encoding UTF8

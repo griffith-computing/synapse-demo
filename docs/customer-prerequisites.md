@@ -74,7 +74,6 @@ assignments are bootstrap prerequisites, not resources created by this template.
 | `AZURE_TENANT_ID` | App Registration > Overview > Directory (tenant) ID | Environment **secret** for deployment and artifact publication |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription > Overview > Subscription ID | Environment **secret** for deployment and artifact publication |
 | `AZURE_RESOURCE_GROUP` | Existing target resource group name | Environment **variable** for both pipelines |
-| `SYNAPSE_WORKSPACE_NAME` | Infrastructure deployment output `synapseWorkspaceName` | Environment **variable** for both pipelines; must match the template-generated name |
 | `SYNAPSE_SQL_ADMIN_PASSWORD` | Customer-provided SQL administrator password meeting Synapse password requirements | Environment **secret** for infrastructure deployment |
 
 The Azure identifiers are not credentials, but both the
@@ -84,6 +83,10 @@ The Azure identifiers are not credentials, but both the
 GitHub secrets and variables are separate: setting one does not populate the other. Missing
 client/tenant values cause `azure/login` to fail before federation or RBAC is checked.
 No Azure client secret is needed or should be created.
+
+Workspace and storage names/endpoints are read automatically from the successful ARM deployment
+`synapse-<env>` in `AZURE_RESOURCE_GROUP`. Do not configure `SYNAPSE_WORKSPACE_NAME`; existing
+values are ignored. Deploy infrastructure with the updated workflow before publishing artifacts.
 
 #### Repository-secret fallback for infrastructure deployment and rollback
 
@@ -104,10 +107,10 @@ the corresponding repository secret prefixed with the target environment:
       [Private-repository environment secrets require GitHub Pro for personal accounts, or an
       eligible organization plan](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments#prerequisites).
       Repository fallback does not enable otherwise unavailable environment protection rules.
-- [ ] Where environment variables are unavailable, configure `AZURE_RESOURCE_GROUP` and
-      `SYNAPSE_WORKSPACE_NAME` as repository Actions variables for a single-environment demo.
+- [ ] Where environment variables are unavailable, configure `AZURE_RESOURCE_GROUP`
+      as a repository Actions variable for a single-environment demo.
       These unprefixed repository variables are shared by all stages; do not promote to
-      test/prod unless their resource-group/workspace configuration is separately supported.
+      test/prod unless their resource-group configuration is separately supported.
 
 The fallback applies to infrastructure deployment and rollback, including SQL administrator
 password injection, and to artifact publication/rollback Azure identifiers.
