@@ -38,18 +38,50 @@ Perform once per environment (dev/test/prod), for whichever platform(s) you use.
 
 ### GitHub Actions
 
-1. In the App Registration, add a **federated credential**:
+1. Obtain the numeric GitHub **Organization ID** and **Repository ID** required by the Azure
+   portal. Install [GitHub CLI](https://cli.github.com/) if needed, then authenticate with a
+   GitHub account that can access the repository:
+
+   ```console
+   gh auth login
+   gh api repos/griffith-computing/synapse-demo --jq "{organizationId: .owner.id, repositoryId: .id}"
+   ```
+
+   Replace `griffith-computing/synapse-demo` if deploying from a different repository.
+   The command returns the repository owner's numeric ID and the repository's numeric ID, for
+   example (illustrative values only):
+
+   ```json
+   {
+     "organizationId": 12345678,
+     "repositoryId": 987654321
+   }
+   ```
+
+   - Copy `organizationId` into the portal's **Organization ID** field.
+   - Copy `repositoryId` into the portal's **Repository ID** field.
+   - These are GitHub numeric IDs, not names, `node_id` values, or Azure identifiers.
+   - Use the double quotes shown above in both PowerShell and Windows Command Prompt
+     (`cmd.exe`). Single quotes do not group arguments in Command Prompt and can cause
+     `accepts 1 arg(s), received 4`.
+   - If GitHub returns `404`, confirm the repository name and that the account used by
+     `gh auth login` has access; private repositories can return `404` for unauthorized requests.
+
+2. In the App Registration, add a **federated credential**:
    - Federated credential scenario: *GitHub Actions deploying Azure resources*.
    - Organization/repository: `griffith-computing/synapse-demo`.
+   - Organization ID / Repository ID: the numeric values obtained above.
    - Entity type: **Environment** (recommended, ties the credential to a GitHub Environment with
      required reviewers) — subject becomes
      `repo:griffith-computing/synapse-demo:environment:<env>`.
+     The portal may include the numeric IDs in the generated subject; its format must match
+     the subject emitted by GitHub for your repository.
      Alternatively use *Branch* (`ref:refs/heads/<branch>`) if environments are not used.
-2. In the GitHub repository settings, create a matching **Environment** named `<env>` (e.g. `dev`,
+3. In the GitHub repository settings, create a matching **Environment** named `<env>` (e.g. `dev`,
    `test`, `prod`) and add repository/environment secrets or variables:
    - `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (these are identifiers, not
      secrets — a client secret is never created or stored).
-3. Workflows in `.github/workflows/` use `azure/login@v2` with `client-id`/`tenant-id`/
+4. Workflows in `.github/workflows/` use `azure/login@v2` with `client-id`/`tenant-id`/
    `subscription-id` inputs and `permissions: id-token: write` at the job level to request the
    OIDC token.
 
