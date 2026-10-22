@@ -7,7 +7,7 @@ using '../main.bicep'
 //   az deployment group create -g <rg-name> -f infra/main.bicep -p infra/parameters/dev.bicepparam
 param environmentName = 'dev'
 param namePrefix = 'syn'
-param location = 'eastus2'
+param location = 'westus3'
 
 // Dev is intentionally left publicly reachable for fast inner-loop access.
 // Flip to 'Disabled' once private endpoints/VNet integration are in place.
