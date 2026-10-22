@@ -26,13 +26,6 @@ variables:
   - name: resourceGroup.prod
     value: 'rg-synapse-poc-prod'
 
-  - name: workspaceName.dev
-    value: 'synws-poc-dev'
-  - name: workspaceName.test
-    value: 'synws-poc-test'
-  - name: workspaceName.prod
-    value: 'synws-poc-prod'
-
   - name: subscriptionId.dev
     value: '00000000-0000-0000-0000-000000000000'
   - name: subscriptionId.test

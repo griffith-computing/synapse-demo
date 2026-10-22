@@ -18,12 +18,12 @@
 # ASSUMPTIONS on shared script interfaces (owned by scripts/, not this
 # workflow):
 #   Test-SynapseRepository.ps1 -ArtifactManifestPath <path> -ArtifactBasePath <path> -Offline
-#   Deploy-SynapseWorkspace.ps1 -ResourceGroupName <rg> -WorkspaceName <name> `
+#   Deploy-SynapseWorkspace.ps1 -ResourceGroupName <rg> -DeploymentName <name> `
 #     -TemplateFile <path> -TemplateParametersFile <path> -SubscriptionId <id> [-DryRun]
 #   Invoke-SynapseRollback.ps1 -PackageDirectory <path> -TargetVersion <version>
 # Azure login identifiers use environment secrets first, then the
 # environment-prefixed repository secrets forwarded by the caller.
-# AZURE_RESOURCE_GROUP and SYNAPSE_WORKSPACE_NAME are GitHub variables.
+# AZURE_RESOURCE_GROUP is a GitHub variable. Workspace details come from Bicep outputs.
 # Required
 # approvals/reviewers for test/prod are configured on those same GitHub
 # Environments per docs/deployment-runbook.md - this workflow only
@@ -150,7 +150,7 @@ jobs:
         run: |
           ./scripts/Deploy-SynapseWorkspace.ps1 `
             -ResourceGroupName "${{ vars.AZURE_RESOURCE_GROUP }}" `
-            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -DeploymentName "synapse-${{ inputs.environment }}" `
             -TemplateFile "${{ github.workspace }}/package-extracted/infra/main.bicep" `
             -TemplateParametersFile "${{ github.workspace }}/package-extracted/infra/parameters/${{ inputs.environment }}.bicepparam" `
             -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID" `
@@ -164,12 +164,21 @@ jobs:
         run: |
           ./scripts/Deploy-SynapseWorkspace.ps1 `
             -ResourceGroupName "${{ vars.AZURE_RESOURCE_GROUP }}" `
-            -WorkspaceName "${{ vars.SYNAPSE_WORKSPACE_NAME }}" `
+            -DeploymentName "synapse-${{ inputs.environment }}" `
             -TemplateFile "${{ github.workspace }}/package-extracted/infra/main.bicep" `
             -TemplateParametersFile "${{ github.workspace }}/package-extracted/infra/parameters/${{ inputs.environment }}.bicepparam" `
             -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID"
         env:
           SYNAPSE_SQL_ADMIN_PASSWORD: ${{ secrets.SYNAPSE_SQL_ADMIN_PASSWORD || secrets.repository_SYNAPSE_SQL_ADMIN_PASSWORD }}
+
+      - name: Resolve deployed workspace
+        id: workspace
+        shell: pwsh
+        run: |
+          ./scripts/Get-SynapseDeploymentOutputs.ps1 `
+            -ResourceGroupName "${{ vars.AZURE_RESOURCE_GROUP }}" `
+            -DeploymentName "synapse-${{ inputs.environment }}" `
+            -SubscriptionId "$env:AZURE_SUBSCRIPTION_ID"
 
       - name: Ensure private endpoints and DNS
         shell: pwsh
@@ -177,7 +186,7 @@ jobs:
           RUNNER_RESOURCE_GROUP: ${{ vars.RUNNER_RESOURCE_GROUP }}
           ENVIRONMENT_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment }}
-          WORKSPACE_NAME: ${{ vars.SYNAPSE_WORKSPACE_NAME }}
+          WORKSPACE_NAME: ${{ steps.workspace.outputs.synapseWorkspaceName }}
         run: |
           ./scripts/Set-SynapsePrivateConnectivity.ps1 -RunnerResourceGroup $env:RUNNER_RESOURCE_GROUP `
             -EnvironmentResourceGroup $env:ENVIRONMENT_RESOURCE_GROUP `
@@ -186,11 +195,7 @@ jobs:
       - name: Verify environment private path
         shell: pwsh
         env:
-          WORKSPACE_NAME: ${{ vars.SYNAPSE_WORKSPACE_NAME }}
-          ENVIRONMENT_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          WORKSPACE_NAME: ${{ steps.workspace.outputs.synapseWorkspaceName }}
+          STORAGE_ACCOUNT_NAME: ${{ steps.workspace.outputs.storageAccountName }}
         run: |
-          $json = az synapse workspace show -g $env:ENVIRONMENT_RESOURCE_GROUP -n $env:WORKSPACE_NAME -o json
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the deployed workspace.' }
-          $workspace = $json | ConvertFrom-Json
-          $storageName = ([Uri]$workspace.defaultDataLakeStorage.accountUrl).Host.Split('.')[0]
-          ./scripts/Test-RunnerPrivateConnectivity.ps1 -StorageAccountName $storageName -WorkspaceName $env:WORKSPACE_NAME
+          ./scripts/Test-RunnerPrivateConnectivity.ps1 -StorageAccountName $env:STORAGE_ACCOUNT_NAME -WorkspaceName $env:WORKSPACE_NAME

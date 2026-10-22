@@ -27,6 +27,10 @@
     is passed to az by path only. Any parameter values appearing in az's
     own stdout/stderr are still redacted before logging.
 
+    WorkspaceName is an optional deployment label, not a resource-name
+    override. Pipelines supply a stable DeploymentName and resolve actual
+    workspace details with Get-SynapseDeploymentOutputs.ps1 after deployment.
+
 .OUTPUTS
     PSCustomObject: Mode, Command, ExitCode, Succeeded, Simulated
 
@@ -34,14 +38,15 @@
     ./Deploy-SynapseWorkspace.ps1 -ResourceGroupName rg-synapse-dev -WorkspaceName synws -TemplateFile .\infra\TemplateForWorkspace.json -TemplateParametersFile .\infra\TemplateParametersForWorkspace.json -Offline
 
 .EXAMPLE
-    ./Deploy-SynapseWorkspace.ps1 -ResourceGroupName rg-synapse-dev -WorkspaceName synws -TemplateFile .\infra\main.bicep -TemplateParametersFile .\infra\parameters\dev.bicepparam -AdditionalParameters 'environmentName=dev' -DryRun
+    ./Deploy-SynapseWorkspace.ps1 -ResourceGroupName rg-synapse-dev -DeploymentName synapse-dev -TemplateFile .\infra\main.bicep -TemplateParametersFile .\infra\parameters\dev.bicepparam -AdditionalParameters 'environmentName=dev' -DryRun
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$ResourceGroupName,
 
-    [Parameter(Mandatory = $true)]
+    # Optional label for legacy callers; Bicep determines the resource name.
+    [Parameter()]
     [string]$WorkspaceName,
 
     [Parameter(Mandatory = $true)]
@@ -96,6 +101,9 @@ try {
     if ($PostDeploymentScript -and -not (Test-Path -LiteralPath $PostDeploymentScript)) {
         throw "PostDeploymentScript not found: $PostDeploymentScript"
     }
+    if ($PostDeploymentScript -and [string]::IsNullOrWhiteSpace($WorkspaceName)) {
+        throw "WorkspaceName is required when supplying PostDeploymentScript."
+    }
 
     $parameterFileText = Get-Content -LiteralPath $TemplateParametersFile -Raw
     $requiresSqlAdminPassword = $parameterFileText -match 'SYNAPSE_SQL_ADMIN_PASSWORD'
@@ -104,7 +112,8 @@ try {
     }
 
     if (-not $DeploymentName) {
-        $DeploymentName = "synapse-$WorkspaceName-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
+        $label = if ($WorkspaceName) { "synapse-$WorkspaceName" } else { 'synapse' }
+        $DeploymentName = "$label-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))"
     }
 
     # -WorkspaceName is used for deployment naming, logging and the

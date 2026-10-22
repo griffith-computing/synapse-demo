@@ -65,6 +65,13 @@ function global:az {
         return '{"properties":{"provisioningState":"Succeeded","instanceView":{"executionState":"Succeeded","exitCode":0}}}'
     }
     if (($arguments -join ' ') -match '^deployment group show') {
+        if ('synapse-dev' -in $arguments) {
+            if ($global:RunnerTestMode -eq 'missing-deployment') {
+                $global:LASTEXITCODE = 1
+                return
+            }
+            return $global:RunnerTestDeployment | ConvertTo-Json -Depth 10
+        }
         return '{"privateEndpointSubnetId":{"value":"/subnets/private"},"privateDnsZoneIds":{"value":{"blob":"/zones/blob","dfs":"/zones/dfs","dev":"/zones/dev","sql":"/zones/sql"}}}'
     }
     if (($arguments -join ' ') -match '^synapse workspace show') {
@@ -75,6 +82,9 @@ function global:az {
 $sandbox = Join-Path ([IO.Path]::GetTempPath()) "runner-test-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 $savedPassword = $env:RUNNER_ADMIN_PASSWORD
+$savedGitHubActions = $env:GITHUB_ACTIONS
+$savedGitHubOutput = $env:GITHUB_OUTPUT
+$savedTfBuild = $env:TF_BUILD
 try {
     $commandScript = Join-Path $scripts 'Invoke-RunnerManagedCommand.ps1'
     $parameters = @{
@@ -100,8 +110,57 @@ try {
     Assert-RunnerFailure { & $commandScript @parameters } 'failed'
     $global:RunnerTestMode = 'success'
 
+    $global:RunnerTestDeployment = @{
+        provisioningState = 'Succeeded'
+        outputs = @{
+            synapseWorkspaceName = @{ value = 'syn-syn-dev-generated123' }
+            storageAccountName = @{ value = 'synstdevgenerated123' }
+            storageAccountDfsEndpoint = @{ value = 'https://synstdevgenerated123.dfs.core.windows.net/' }
+            synapseWebEndpoint = @{ value = 'https://syn-syn-dev-generated123.dev.azuresynapse.net' }
+        }
+    }
+    $resolver = Join-Path $scripts 'Get-SynapseDeploymentOutputs.ps1'
+    $resolveParameters = @{ ResourceGroupName = 'dev'; DeploymentName = 'synapse-dev'; SubscriptionId = 'test-subscription' }
+    $env:GITHUB_ACTIONS = 'true'
+    $env:GITHUB_OUTPUT = Join-Path $sandbox 'github-output'
+    $resolved = & $resolver @resolveParameters
+    Assert-RunnerTest ($resolved.synapseWorkspaceName -eq 'syn-syn-dev-generated123') 'Resolver did not return the Bicep workspace name.'
+    Assert-RunnerTest ($resolved.storageAccountName -eq 'synstdevgenerated123') 'Resolver did not return the Bicep storage name.'
+    $outputText = Get-Content -LiteralPath $env:GITHUB_OUTPUT -Raw
+    foreach ($name in $global:RunnerTestDeployment.outputs.Keys) {
+        Assert-RunnerTest ($outputText.Contains("$name=$($global:RunnerTestDeployment.outputs[$name].value)")) "GitHub output '$name' was not exported."
+    }
+    $lookup = $global:RunnerTestCalls[$global:RunnerTestCalls.Count - 1].Arguments -join ' '
+    Assert-RunnerTest ($lookup -match '--resource-group dev --name synapse-dev') 'Resolver did not query the exact environment deployment.'
+    Assert-RunnerTest ($lookup -match '--subscription test-subscription') 'Resolver did not scope the deployment query to the subscription.'
+    $env:GITHUB_ACTIONS = ''
+    $env:TF_BUILD = 'True'
+    $adoOutput = (& $resolver @resolveParameters) 6>&1 | Out-String
+    Assert-RunnerTest ($adoOutput.Contains('##vso[task.setvariable variable=synapseWorkspaceName]syn-syn-dev-generated123')) 'Azure DevOps did not receive the resolved workspace.'
+    $env:TF_BUILD = ''
+
+    $global:RunnerTestMode = 'missing-deployment'
+    Assert-RunnerFailure { & $resolver @resolveParameters } 'Cannot read infrastructure deployment'
+    $global:RunnerTestMode = 'success'
+    $global:RunnerTestDeployment.provisioningState = 'Failed'
+    Assert-RunnerFailure { & $resolver @resolveParameters } 'has not succeeded'
+    $global:RunnerTestDeployment.provisioningState = 'Succeeded'
+    foreach ($name in @($global:RunnerTestDeployment.outputs.Keys)) {
+        $output = $global:RunnerTestDeployment.outputs[$name]
+        $global:RunnerTestDeployment.outputs.Remove($name)
+        Assert-RunnerFailure { & $resolver @resolveParameters } "missing required output '$name'"
+        $global:RunnerTestDeployment.outputs[$name] = @{ value = ' ' }
+        Assert-RunnerFailure { & $resolver @resolveParameters } "missing required output '$name'"
+        $global:RunnerTestDeployment.outputs[$name] = $output
+    }
+    $env:GITHUB_ACTIONS = $savedGitHubActions
+    $env:GITHUB_OUTPUT = $savedGitHubOutput
+    $env:TF_BUILD = $savedTfBuild
+
     & (Join-Path $scripts 'Set-SynapsePrivateConnectivity.ps1') -RunnerResourceGroup shared `
-        -EnvironmentResourceGroup dev -EnvironmentName dev -WorkspaceName workspace
+        -EnvironmentResourceGroup dev -EnvironmentName dev -WorkspaceName $resolved.synapseWorkspaceName
+    $workspaceLookup = @($global:RunnerTestCalls | Where-Object { ($_.Arguments -join ' ') -match '^synapse workspace show' })[0]
+    Assert-RunnerTest ('syn-syn-dev-generated123' -in $workspaceLookup.Arguments) 'Private connectivity did not query the template-generated workspace.'
     $deploy = @($global:RunnerTestCalls | Where-Object { ($_.Arguments -join ' ') -match '^deployment group create' })[0]
     Assert-RunnerTest ($deploy.Body.parameters.storageAccountId.value -eq '/storage/dev') 'Storage ID was not resolved from the workspace.'
     Assert-RunnerTest ($deploy.Body.parameters.synapseWorkspaceId.value -eq '/workspaces/dev') 'Workspace ID was not preserved.'
@@ -192,7 +251,17 @@ try {
         Assert-RunnerTest ($workflow -match 'runs-on: \[self-hosted, Windows, X64, synapse-private\]') "$name does not route to the Windows runner."
         Assert-RunnerTest ($workflow -match "github.ref == 'refs/heads/main'") "$name is not restricted to main."
         Assert-RunnerTest ($workflow -match 'Test-RunnerPrivateConnectivity.ps1') "$name has no private-path preflight."
+        Assert-RunnerTest ($workflow -notmatch 'vars.SYNAPSE_WORKSPACE_NAME') "$name still uses a configured workspace name."
+        Assert-RunnerTest ($workflow -match 'Get-SynapseDeploymentOutputs.ps1') "$name does not resolve Bicep outputs."
+        Assert-RunnerTest ($workflow.Contains('-DeploymentName "synapse-${{ inputs.environment }}"')) "$name does not use the canonical deployment name."
+        Assert-RunnerTest ($workflow.Contains('WORKSPACE_NAME: ${{ steps.workspace.outputs.synapseWorkspaceName }}')) "$name does not use the resolved workspace for private connectivity."
     }
+    $adoDeploy = Get-Content (Join-Path $root 'azure-pipelines\templates\deploy-stage.yml') -Raw
+    $adoPublish = Get-Content (Join-Path $root 'azure-pipelines\templates\publish-artifacts-stage.yml') -Raw
+    Assert-RunnerTest ($adoDeploy.Contains('-DeploymentName "synapse-${{ parameters.environmentName }}"')) 'ADO deployment does not use the canonical deployment name.'
+    Assert-RunnerTest ($adoPublish.Contains('-DeploymentName "synapse-${{ parameters.environmentName }}"')) 'ADO publication does not query the canonical deployment name.'
+    Assert-RunnerTest ($adoPublish.Contains('-WorkspaceName "$(synapseWorkspaceName)"')) 'ADO publication does not use the resolved workspace.'
+    Assert-RunnerTest ($adoPublish -notmatch 'parameters.workspaceName') 'ADO publication still uses a configured workspace name.'
     $bootstrap = Get-Content (Join-Path $root '.github\workflows\deploy-runner.yml') -Raw
     Assert-RunnerTest ($bootstrap -match 'runs-on: ubuntu-latest') 'Bootstrap depends on its own runner.'
     Assert-RunnerTest ($bootstrap.IndexOf('Install Windows runner prerequisites') -lt $bootstrap.IndexOf('Create repository administration token')) 'Registration token is minted before prerequisite installation.'
@@ -237,10 +306,14 @@ try {
     Write-Host "$count runner infrastructure checks passed."
 } finally {
     $env:RUNNER_ADMIN_PASSWORD = $savedPassword
+    $env:GITHUB_ACTIONS = $savedGitHubActions
+    $env:GITHUB_OUTPUT = $savedGitHubOutput
+    $env:TF_BUILD = $savedTfBuild
     Remove-Item -LiteralPath $sandbox -Recurse -Force
     Remove-Item Function:\global:az
     Remove-Item Function:\global:New-ItemProperty, Function:\global:Get-Service -ErrorAction SilentlyContinue
     Remove-Item Function:\global:Resolve-DnsName -ErrorAction SilentlyContinue
     Remove-Variable RunnerTestCalls, RunnerTestMode, RunnerTestRestrictions -Scope Global
     Remove-Variable RunnerTestServiceWrites -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable RunnerTestDeployment -Scope Global -ErrorAction SilentlyContinue
 }

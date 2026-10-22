@@ -30,8 +30,6 @@ parameters:
     type: string
   - name: resourceGroupName
     type: string
-  - name: workspaceName
-    type: string
   - name: subscriptionId
     type: string
   - name: dependsOn
@@ -137,7 +135,7 @@ stages:
                         scriptPath: $(Build.SourcesDirectory)/scripts/Deploy-SynapseWorkspace.ps1
                         arguments: >-
                           -ResourceGroupName "${{ parameters.resourceGroupName }}"
-                          -WorkspaceName "${{ parameters.workspaceName }}"
+                          -DeploymentName "synapse-${{ parameters.environmentName }}"
                           -TemplateFile "$(Pipeline.Workspace)/package-extracted/infra/main.bicep"
                           -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/infra/parameters/${{ parameters.environmentName }}.bicepparam"
                           -SubscriptionId "${{ parameters.subscriptionId }}"
@@ -155,7 +153,7 @@ stages:
                     scriptPath: $(Build.SourcesDirectory)/scripts/Deploy-SynapseWorkspace.ps1
                     arguments: >-
                       -ResourceGroupName "${{ parameters.resourceGroupName }}"
-                      -WorkspaceName "${{ parameters.workspaceName }}"
+                      -DeploymentName "synapse-${{ parameters.environmentName }}"
                       -TemplateFile "$(Pipeline.Workspace)/package-extracted/infra/main.bicep"
                       -TemplateParametersFile "$(Pipeline.Workspace)/package-extracted/infra/parameters/${{ parameters.environmentName }}.bicepparam"
                       -SubscriptionId "${{ parameters.subscriptionId }}"

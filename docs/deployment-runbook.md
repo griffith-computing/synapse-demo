@@ -133,6 +133,28 @@ the artifact pipeline can seed the packaged raw sample CSV.
 
 ## Environment configuration
 
+### Workspace identity from infrastructure outputs
+
+`infra/main.bicep` generates the workspace name from the prefix, environment, and a
+resource-group-derived suffix. A deployment label or a GitHub variable does not override that
+resource name. Both pipeline platforms now deploy under the stable ARM deployment name
+`synapse-<env>` (for example, `synapse-dev`), and artifact publication/rollback resolve that exact
+deployment with `scripts/Get-SynapseDeploymentOutputs.ps1`. GitHub private connectivity and
+preflight checks use those same outputs. No `SYNAPSE_WORKSPACE_NAME` GitHub variable or
+`workspaceName.*` Azure DevOps variable is required.
+
+For an environment deployed by an older workflow, run infrastructure deployment from the updated
+commit once before publishing artifacts. This records the canonical deployment outputs and
+reapplies the same deterministic resources, rather than creating a separately named workspace.
+If the previous run failed only while configuring private connectivity, the new deployment
+retries connectivity against the workspace Bicep actually created. Start a new workflow run;
+rerunning an older run retains its old workflow definition.
+
+The resolver fails if the named deployment is missing, unsuccessful, or lacks required outputs;
+it never selects an arbitrary workspace or falls back to the old configured name. Retain the
+`synapse-<env>` deployment record while the environment is in use. Local deployments below query
+their exact `$deploymentName` instead and do not update the pipeline's canonical record.
+
 ### Shared Windows jumpbox and GitHub runner
 
 GitHub deploy/publish/rollback execution requires one shared Windows runner. Packaging, PR
