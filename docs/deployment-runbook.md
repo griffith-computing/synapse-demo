@@ -268,6 +268,23 @@ outputs. It uses [the shared template](../infra/runner/main.bicep), not environm
 Shared what-if precedes deployment. SKU restrictions and regional/family quota are checked again,
 but passing those checks does not guarantee instantaneous Azure allocation capacity.
 
+If bootstrap reports that the VM SKU is unavailable or restricted, inspect the blocking
+restriction details in the error. The shared VM has no availability zone, so zone-only
+restrictions do not block it; a location restriction covering `westus3` still does.
+Check the selected SKU using the same subscription as the bootstrap identity:
+
+```powershell
+az vm list-skus --location westus3 --resource-type virtualMachines --size Standard_B2as_v2 --all --output json
+az vm list-usage --location westus3 --output table
+```
+
+For a genuine regional/subscription restriction, request SKU access from Azure or set
+`RUNNER_VM_SIZE` in the repository Actions variables (or the `runner` Environment override)
+to an approved Windows x64/Trusted Launch-compatible size with sufficient regional and family
+quota, then start a new run on the updated `main` commit. Quota and SKU access are separate
+checks; increasing quota does not necessarily remove `NotAvailableForSubscription`.
+The bootstrap deliberately does not silently switch sizes or regions.
+
 Prerequisites are installed by [Initialize-GitHubRunner.ps1](../scripts/Initialize-GitHubRunner.ps1).
 PowerShell/Git/runner downloads use official release metadata and SHA256 asset digests; the
 Azure CLI installer requires a valid Microsoft Authenticode signature. A missing digest or

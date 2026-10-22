@@ -24,6 +24,7 @@ function Assert-RunnerFailure {
 
 $global:RunnerTestCalls = [Collections.Generic.List[object]]::new()
 $global:RunnerTestMode = 'success'
+$global:RunnerTestRestrictions = @()
 function global:az {
     $global:LASTEXITCODE = 0
     $arguments = @($args)
@@ -36,10 +37,13 @@ function global:az {
     $global:RunnerTestCalls.Add(@{ Arguments = $arguments; Body = $body })
     $text = $arguments -join ' '
     if ($text -match '^vm list-skus') {
-        if ($global:RunnerTestMode -eq 'restricted-sku') {
-            return '[{"name":"Standard_B2as_v2","family":"standardBasv2Family","restrictions":[{"reasonCode":"NotAvailableForSubscription"}],"capabilities":[{"name":"vCPUs","value":"2"}]}]'
-        }
-        return '[{"name":"Standard_B2as_v2","family":"standardBasv2Family","restrictions":[],"capabilities":[{"name":"vCPUs","value":"2"}]}]'
+        if ($global:RunnerTestMode -eq 'missing-sku') { return '[]' }
+        return ConvertTo-Json -InputObject @(@{
+            name = 'Standard_B2as_v2'
+            family = 'standardBasv2Family'
+            restrictions = $global:RunnerTestRestrictions
+            capabilities = @(@{ name = 'vCPUs'; value = '2' })
+        }) -Depth 10
     }
     if ($text -match '^vm list-usage') {
         return '[{"name":{"value":"cores"},"limit":100,"currentValue":100},{"name":{"value":"standardBasv2Family"},"limit":100,"currentValue":100}]'
@@ -108,9 +112,42 @@ try {
 
     $env:RUNNER_ADMIN_PASSWORD = 'unit-test-password'
     $deploymentScript = Join-Path $scripts 'Deploy-SharedRunner.ps1'
-    $global:RunnerTestMode = 'restricted-sku'
-    Assert-RunnerFailure { & $deploymentScript -ResourceGroupName shared } 'unavailable or restricted'
+    $global:RunnerTestMode = 'missing-sku'
+    Assert-RunnerFailure { & $deploymentScript -ResourceGroupName shared } 'not uniquely found.*RUNNER_VM_SIZE'
+    $global:RunnerTestMode = 'existing-vm'
+    $zoneRestriction = @{
+        type = 'Zone'; values = @('westus3'); reasonCode = 'NotAvailableForSubscription'
+        restrictionInfo = @{ locations = @('westus3'); zones = @('1', '2', '3') }
+    }
+    foreach ($restriction in @(
+        @{ type = 'Location'; values = @('westus3'); reasonCode = 'NotAvailableForSubscription' },
+        @{ type = 'Location'; restrictionInfo = @{ locations = @('WESTUS3') }; reasonCode = 'QuotaId' },
+        @{ type = 'Location'; reasonCode = 'NotAvailableForSubscription' },
+        @{ reasonCode = 'NotAvailableForSubscription' },
+        @{ type = 'Unknown'; reasonCode = 'NotAvailableForSubscription' }
+    )) {
+        $global:RunnerTestRestrictions = @($zoneRestriction, $restriction)
+        $callCount = $global:RunnerTestCalls.Count
+        Assert-RunnerFailure { & $deploymentScript -ResourceGroupName shared } "Blocking restrictions:.*$($restriction.reasonCode).*RUNNER_VM_SIZE"
+        Assert-RunnerTest (@($global:RunnerTestCalls | Select-Object -Skip $callCount | Where-Object {
+            ($_.Arguments -join ' ') -match '^deployment group'
+        }).Count -eq 0) 'A blocked SKU reached deployment.'
+    }
+    foreach ($restrictions in @(
+        @{ Items = @() },
+        @{ Items = @($zoneRestriction) },
+        @{ Items = @(@{ type = 'Location'; values = @('eastus2'); reasonCode = 'NotAvailableForSubscription' }) },
+        @{ Items = @(@{ type = 'Location'; restrictionInfo = @{ locations = @('eastus2') }; reasonCode = 'NotAvailableForSubscription' }) }
+    )) {
+        $global:RunnerTestRestrictions = $restrictions.Items
+        $callCount = $global:RunnerTestCalls.Count
+        & $deploymentScript -ResourceGroupName shared
+        Assert-RunnerTest (@($global:RunnerTestCalls | Select-Object -Skip $callCount | Where-Object {
+            ($_.Arguments -join ' ') -match '^deployment group create'
+        }).Count -eq 1) 'A regionally available SKU did not reach deployment.'
+    }
     $global:RunnerTestMode = 'success'
+    $global:RunnerTestRestrictions = @($zoneRestriction)
     Assert-RunnerFailure { & $deploymentScript -ResourceGroupName shared } 'Insufficient or unknown quota'
     $global:RunnerTestMode = 'existing-vm'
     & $deploymentScript -ResourceGroupName shared
@@ -204,6 +241,6 @@ try {
     Remove-Item Function:\global:az
     Remove-Item Function:\global:New-ItemProperty, Function:\global:Get-Service -ErrorAction SilentlyContinue
     Remove-Item Function:\global:Resolve-DnsName -ErrorAction SilentlyContinue
-    Remove-Variable RunnerTestCalls, RunnerTestMode -Scope Global
+    Remove-Variable RunnerTestCalls, RunnerTestMode, RunnerTestRestrictions -Scope Global
     Remove-Variable RunnerTestServiceWrites -Scope Global -ErrorAction SilentlyContinue
 }

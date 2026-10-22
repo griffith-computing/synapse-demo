@@ -20,8 +20,30 @@ if ($LASTEXITCODE -ne 0) { throw "Shared resource group '$ResourceGroupName' mus
 $json = az vm list-skus --location $Location --resource-type virtualMachines --all --output json
 if ($LASTEXITCODE -ne 0) { throw 'Unable to check VM SKU availability.' }
 $skus = @($json | ConvertFrom-Json | Where-Object name -EQ $VmSize)
-if ($skus.Count -ne 1 -or @($skus[0].restrictions).Count -ne 0) { throw "VM SKU '$VmSize' is unavailable or restricted in '$Location'." }
+if ($skus.Count -ne 1) {
+    throw "VM SKU '$VmSize' was not uniquely found in '$Location'. Check az vm list-skus and set RUNNER_VM_SIZE to an available Windows x64 size."
+}
 $sku = $skus[0]
+# The template deploys a regional VM without an availability zone.
+$blockingRestrictions = @($sku.restrictions | Where-Object {
+    if ($_.PSObject.Properties['type'] -and $_.type -eq 'Zone') { return $false }
+    if ($_.PSObject.Properties['type'] -and $_.type -eq 'Location') {
+        $locations = @()
+        if ($_.PSObject.Properties['restrictionInfo'] -and $null -ne $_.restrictionInfo -and
+            $_.restrictionInfo.PSObject.Properties['locations']) {
+            $locations = @($_.restrictionInfo.locations)
+        }
+        if ($locations.Count -eq 0 -and $_.PSObject.Properties['values']) {
+            $locations = @($_.values)
+        }
+        return $locations.Count -eq 0 -or $Location -in $locations
+    }
+    return $true
+})
+if ($blockingRestrictions.Count -ne 0) {
+    $details = ConvertTo-Json -InputObject $blockingRestrictions -Depth 10 -Compress
+    throw "VM SKU '$VmSize' is unavailable or restricted in '$Location'. Blocking restrictions: $details. Set RUNNER_VM_SIZE to an available Windows x64 size or request access to this SKU in Azure."
+}
 $cores = [int]($sku.capabilities | Where-Object name -EQ 'vCPUs').value
 $json = az vm list --resource-group $ResourceGroupName --output json
 if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect existing shared VMs.' }
