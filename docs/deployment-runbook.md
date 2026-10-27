@@ -621,6 +621,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Synapse artifact publication failed.' }
 
 Do not substitute the local workspace label from steps 5-6 here. Artifact publication must use
 the actual `$workspaceName` returned by Bicep.
+SQL script artifacts are published from their `properties.content.query` text as temporary `.sql`
+files, with the artifact's folder, result limit, and connection settings passed as CLI options.
 
 ### 8. Prepare and run smoke tests
 

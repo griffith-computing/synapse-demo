@@ -9,10 +9,12 @@
 .DESCRIPTION
     This PoC deploys workspace artifacts directly with `az synapse <kind>
     create --file`, rather than generating an ARM template via the Synapse
-    "publish" / npm export toolchain. That keeps deployment fully scriptable
-    from a clean checkout (no npm/network dependency to *build* the
-    deployable unit) while still using an officially supported Azure CLI
-    surface for every artifact kind involved in this PoC.
+    "publish" / npm export toolchain. SQL scripts are the exception: their
+    query is written to a temporary .sql file because the SQL script CLI
+    command expects query text, not an artifact-definition JSON file. That
+    keeps deployment fully scriptable from a clean checkout (no npm/network
+    dependency to *build* the deployable unit) while still using an officially
+    supported Azure CLI surface for every artifact kind involved in this PoC.
 
     Artifacts are deployed in dependency order so references resolve:
     linkedService -> dataset -> pipeline -> sqlscript -> trigger.
@@ -219,15 +221,56 @@ try {
                     }
                 }
 
-                $patchedPath = Join-Path $tempRoot "$artifactName.json"
-                $artifact | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $patchedPath -Encoding UTF8
+                if ($folder -eq 'sqlscript') {
+                    $properties = $artifact.properties
+                    if (-not $properties -or
+                        -not $properties.PSObject.Properties.Match('content').Count -or
+                        -not $properties.content -or
+                        -not $properties.content.PSObject.Properties.Match('query').Count -or
+                        [string]::IsNullOrWhiteSpace([string]$properties.content.query)) {
+                        throw "SQL script artifact '$artifactName' must define a non-empty properties.content.query."
+                    }
 
-                $argList = @(
-                    'synapse', $kind, 'create'
-                    '--workspace-name', $WorkspaceName
-                    '--name', $artifactName
-                    '--file', "@$patchedPath"
-                )
+                    $queryPath = Join-Path $tempRoot "$artifactName.sql"
+                    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+                    [System.IO.File]::WriteAllText($queryPath, [string]$properties.content.query, $utf8NoBom)
+
+                    $argList = @(
+                        'synapse', 'sql-script', 'create'
+                        '--workspace-name', $WorkspaceName
+                        '--name', $artifactName
+                        '--file', "`"$queryPath`""
+                    )
+
+                    if ($properties.PSObject.Properties.Match('folder').Count -and
+                        $properties.folder -and $properties.folder.name) {
+                        $argList += @('--folder-name', [string]$properties.folder.name)
+                    }
+                    if ($properties.content.PSObject.Properties.Match('resultLimit').Count -and
+                        $null -ne $properties.content.resultLimit) {
+                        $argList += @('--result-limit', [string]$properties.content.resultLimit)
+                    }
+                    if ($properties.content.PSObject.Properties.Match('currentConnection').Count -and
+                        $properties.content.currentConnection) {
+                        $connection = $properties.content.currentConnection
+                        if ($connection.PSObject.Properties.Match('databaseName').Count -and $connection.databaseName) {
+                            $argList += @('--sql-database-name', [string]$connection.databaseName)
+                        }
+                        if ($connection.PSObject.Properties.Match('poolName').Count -and $connection.poolName) {
+                            $argList += @('--sql-pool-name', [string]$connection.poolName)
+                        }
+                    }
+                } else {
+                    $patchedPath = Join-Path $tempRoot "$artifactName.json"
+                    $artifact | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $patchedPath -Encoding UTF8
+
+                    $argList = @(
+                        'synapse', $kind, 'create'
+                        '--workspace-name', $WorkspaceName
+                        '--name', $artifactName
+                        '--file', "@$patchedPath"
+                    )
+                }
                 if ($SubscriptionId) {
                     $argList += @('--subscription', $SubscriptionId)
                 }
