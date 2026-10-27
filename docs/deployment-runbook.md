@@ -621,8 +621,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Synapse artifact publication failed.' }
 
 Do not substitute the local workspace label from steps 5-6 here. Artifact publication must use
 the actual `$workspaceName` returned by Bicep.
-SQL script artifacts are published from their `properties.content.query` text as temporary `.sql`
-files, with the artifact's folder, result limit, and connection settings passed as CLI options.
+SQL script artifacts are published with `az rest` to the Synapse data-plane SQL Scripts API
+(`2020-12-01`), using a temporary UTF-8 JSON payload that preserves the resolved query, folder,
+result limit, connection settings, and other script metadata. The explicit Synapse token audience
+is `https://dev.azuresynapse.net`. This avoids the `az synapse sql-script create --result-limit`
+integer-enum parser bug (`'int' object has no attribute 'lower'`) without dropping the result limit.
+Other artifact kinds continue to use `az synapse <kind> create`.
 
 ### 8. Prepare and run smoke tests
 

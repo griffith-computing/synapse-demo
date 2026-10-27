@@ -10,8 +10,8 @@
     This PoC deploys workspace artifacts directly with `az synapse <kind>
     create --file`, rather than generating an ARM template via the Synapse
     "publish" / npm export toolchain. SQL scripts are the exception: their
-    query is written to a temporary .sql file because the SQL script CLI
-    command expects query text, not an artifact-definition JSON file. That
+    definition is sent with `az rest` to the Synapse data-plane API to avoid
+    the SQL script CLI's integer-enum parser bug for --result-limit. That
     keeps deployment fully scriptable from a clean checkout (no npm/network
     dependency to *build* the deployable unit) while still using an officially
     supported Azure CLI surface for every artifact kind involved in this PoC.
@@ -231,35 +231,21 @@ try {
                         throw "SQL script artifact '$artifactName' must define a non-empty properties.content.query."
                     }
 
-                    $queryPath = Join-Path $tempRoot "$artifactName.sql"
+                    $payloadPath = Join-Path $tempRoot "$artifactName.json"
+                    $payload = @{ name = $artifactName; properties = $properties } | ConvertTo-Json -Depth 20
                     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-                    [System.IO.File]::WriteAllText($queryPath, [string]$properties.content.query, $utf8NoBom)
+                    [System.IO.File]::WriteAllText($payloadPath, $payload, $utf8NoBom)
+                    $encodedName = [Uri]::EscapeDataString($artifactName)
+                    $uri = "https://$WorkspaceName.dev.azuresynapse.net/sqlScripts/${encodedName}?api-version=2020-12-01"
 
                     $argList = @(
-                        'synapse', 'sql-script', 'create'
-                        '--workspace-name', $WorkspaceName
-                        '--name', $artifactName
-                        '--file', "`"$queryPath`""
+                        'rest', '--method', 'put'
+                        '--url', "`"$uri`""
+                        '--resource', 'https://dev.azuresynapse.net'
+                        '--headers', 'Content-Type=application/json'
+                        '--body', "`"@$payloadPath`""
+                        '--output', 'none'
                     )
-
-                    if ($properties.PSObject.Properties.Match('folder').Count -and
-                        $properties.folder -and $properties.folder.name) {
-                        $argList += @('--folder-name', [string]$properties.folder.name)
-                    }
-                    if ($properties.content.PSObject.Properties.Match('resultLimit').Count -and
-                        $null -ne $properties.content.resultLimit) {
-                        $argList += @('--result-limit', [string]$properties.content.resultLimit)
-                    }
-                    if ($properties.content.PSObject.Properties.Match('currentConnection').Count -and
-                        $properties.content.currentConnection) {
-                        $connection = $properties.content.currentConnection
-                        if ($connection.PSObject.Properties.Match('databaseName').Count -and $connection.databaseName) {
-                            $argList += @('--sql-database-name', [string]$connection.databaseName)
-                        }
-                        if ($connection.PSObject.Properties.Match('poolName').Count -and $connection.poolName) {
-                            $argList += @('--sql-pool-name', [string]$connection.poolName)
-                        }
-                    }
                 } else {
                     $patchedPath = Join-Path $tempRoot "$artifactName.json"
                     $artifact | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $patchedPath -Encoding UTF8
