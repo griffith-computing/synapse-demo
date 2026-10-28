@@ -43,7 +43,7 @@ function Wait-IdleAgentPool {
     throw "Pool '$PoolName' is still busy. Drain it before bootstrapping."
 }
 Wait-IdleAgentPool
-$packages = Invoke-RestMethod -Uri "$baseUrl/_apis/distributedtask/packages/agent/win-x64?`$top=1&api-version=7.1-preview.1" -Headers $headers
+$packages = Invoke-RestMethod -Uri "$baseUrl/_apis/distributedtask/packages/agent?platform=win-x64&`$top=1&api-version=7.1-preview.1" -Headers $headers
 $package = @($packages.value)
 if ($package.Count -ne 1) { throw 'Azure DevOps returned no unique Windows x64 agent package.' }
 $packageHash = $package[0].hashValue -replace '-', ''
