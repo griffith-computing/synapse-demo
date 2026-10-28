@@ -761,7 +761,8 @@ longer required.
   `/_apis/distributedtask/packages/agent?platform=win-x64` route. If ADO reports that the
   agent package type cannot be found, bootstrap falls back to the latest Windows x64 release
   metadata from `microsoft/azure-pipelines-agent` on GitHub. Ensure the hosted job can reach
-  `api.github.com`; both paths validate the official HTTPS download host and SHA256 before
+  `github.com`; bootstrap reads the public latest-release page, avoiding the anonymous
+  GitHub API quota shared by hosted agents. Both paths validate the official HTTPS download host and SHA256 before
   installing shared prerequisites without installing a GitHub runner, then
   registers a Network Service Windows service. The token is sent only in protected managed
   Run Command parameters and a temporary guest environment variable, not command-line arguments.
@@ -834,6 +835,9 @@ metadata, selecting the standard `vsts-agent-win-x64` package rather than the al
 `pipelines-agent` package. It requires a unique standard Windows x64 row with a matching
 official download URL and SHA256; missing, ambiguous, or invalid metadata stops bootstrap
 before VM deployment.
+No GitHub token or pipeline variable change is required for this fallback. If the release
+page cannot be reached, bootstrap fails explicitly; check hosted-job access to `github.com`
+and retry after resolving connectivity or service availability.
 Check the `vstsagent.*` service, machine PATH/PowerShell 7/Azure CLI/Bicep, and required capabilities
 if jobs remain queued. Repair a mismatched registration explicitly rather than using `--replace`.
 For private-path failures, check endpoint approval, private DNS zone groups/VNet links, shared-RG

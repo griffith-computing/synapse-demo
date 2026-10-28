@@ -44,15 +44,17 @@ function Wait-IdleAgentPool {
 }
 Wait-IdleAgentPool
 function Get-LatestOfficialWindowsAgentPackage {
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest' `
-        -Headers @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-    $windowsRows = @($release.body -split "`r?`n" | Where-Object { $_ -match '^\|\s*Windows x64\s*\|\s*\[vsts-agent-win-x64-' })
+    # The public release page avoids the anonymous GitHub API quota shared by hosted agents.
+    $release = Invoke-WebRequest -Uri 'https://github.com/microsoft/azure-pipelines-agent/releases/latest' -TimeoutSec 60
+    $windowsRows = @([regex]::Matches($release.Content, '(?s)<tr\b[^>]*>.*?</tr>') |
+        ForEach-Object { $_.Value } |
+        Where-Object { $_ -match '(?s)^<tr\b[^>]*>\s*<td>\s*Windows x64\s*</td>\s*<td>\s*<a\b[^>]*>\s*vsts-agent-win-x64-' })
     if ($windowsRows.Count -ne 1) {
         throw 'Microsoft agent release metadata did not contain one standard Windows x64 package row.'
     }
     $match = [regex]::Match(
         $windowsRows[0],
-        '^\|\s*Windows x64\s*\|\s*\[(?<file>vsts-agent-win-x64-(?<version>\d+(?:\.\d+)+)\.zip)\]\(https://download\.agent\.dev\.azure\.com/agent/(?<urlVersion>\d+(?:\.\d+)+)/(?<urlFile>vsts-agent-win-x64-[0-9.]+\.zip)\)\s*\|\s*(?<hash>[a-fA-F0-9]{64})\s*\|$'
+        '(?s)^<tr\b[^>]*>\s*<td>\s*Windows x64\s*</td>\s*<td>\s*<a\s+href="https://download\.agent\.dev\.azure\.com/agent/(?<urlVersion>\d+(?:\.\d+)+)/(?<urlFile>vsts-agent-win-x64-[0-9.]+\.zip)"(?:\s+rel="nofollow")?\s*>\s*(?<file>vsts-agent-win-x64-(?<version>\d+(?:\.\d+)+)\.zip)\s*</a>\s*</td>\s*<td>\s*(?<hash>[a-fA-F0-9]{64})\s*</td>\s*</tr>$'
     )
     if (-not $match.Success -or
         $match.Groups['version'].Value -ne $match.Groups['urlVersion'].Value -or

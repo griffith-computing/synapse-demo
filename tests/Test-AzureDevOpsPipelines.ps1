@@ -214,16 +214,26 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     $global:AdoBootstrapDeploymentCount = 0
     $global:AdoBootstrapMode = 'online'
     $global:AdoBootstrapHeaders = [Collections.Generic.List[string]]::new()
-    $standardPackageRow = "| Windows x64    | [vsts-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip) | $('cd' * 32) |"
-    $alternatePackageRow = "| Windows x64 | [pipelines-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/pipelines-agent-win-x64-5.0.0.zip) | $('ef' * 32) |"
+    $standardPackageRow = "<tr>`n<td>Windows x64</td>`n<td><a href=`"https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip`" rel=`"nofollow`">vsts-agent-win-x64-5.0.0.zip</a></td>`n<td>$('cd' * 32)</td>`n</tr>"
+    $alternatePackageRow = "<tr>`n<td>Windows x64</td>`n<td><a href=`"https://download.agent.dev.azure.com/agent/5.0.0/pipelines-agent-win-x64-5.0.0.zip`" rel=`"nofollow`">pipelines-agent-win-x64-5.0.0.zip</a></td>`n<td>$('ef' * 32)</td>`n</tr>"
     $global:AdoBootstrapReleaseBody = $standardPackageRow
+    function global:Invoke-WebRequest {
+        param($Uri, $TimeoutSec, $Headers)
+        if ($Uri -ne 'https://github.com/microsoft/azure-pipelines-agent/releases/latest' -or
+            $TimeoutSec -ne 60 -or $Headers) {
+            throw 'Release lookup must use the public latest-release page with a bounded timeout and no credentials.'
+        }
+        if ($global:AdoBootstrapMode -eq 'release-unavailable') { throw 'Release page unavailable.' }
+        return @{ Content = $global:AdoBootstrapReleaseBody }
+    }
     function global:az {
         $global:LASTEXITCODE = 0
         '{"vmName":{"value":"private-agent"},"vmResourceId":{"value":"/vm/test"},"location":{"value":"westus3"}}'
     }
     function global:Invoke-RestMethod {
         param($Uri, $Headers)
-        if ($Uri -notlike 'https://api.github.com/*') { $global:AdoBootstrapHeaders.Add($Headers.Authorization) }
+        if ($Uri -like 'https://api.github.com/*') { throw '403 (rate limit exceeded)' }
+        $global:AdoBootstrapHeaders.Add($Headers.Authorization)
         if ($global:AdoBootstrapMode -eq 'unauthorized') { throw 'Registration identity is unauthorized.' }
         if ($Uri -match '/pools\?') {
             if ($global:AdoBootstrapMode -eq 'missing-pool') { return @{ value = @() } }
@@ -233,15 +243,12 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
             if ($Uri -cne 'https://dev.azure.com/example/_apis/distributedtask/packages/agent?platform=win-x64&$top=1&api-version=7.1-preview.1') {
                 throw 'Agent package lookup must pass the Windows x64 platform as a query parameter and request one package.'
             }
-            if ($global:AdoBootstrapMode -eq 'package-not-found') {
+            if ($global:AdoBootstrapMode -in @('package-not-found', 'release-unavailable')) {
                 throw 'A package with the type agent could not be found.'
             }
             $hash = ('ab-' * 31) + 'ab'
             if ($global:AdoBootstrapMode -eq 'bad-hash') { $hash = '' }
             return @{ value = @(@{ hashValue = $hash; downloadUrl = 'https://download.agent.dev.azure.com/agent/test.zip' }) }
-        }
-        if ($Uri -eq 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest') {
-            return @{ body = $global:AdoBootstrapReleaseBody }
         }
         $agent = [pscustomobject]@{
             name = 'private-agent'; enabled = $true; status = 'online'
@@ -280,9 +287,10 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     foreach ($newline in @("`n", "`r`n")) {
         $global:AdoBootstrapCommands.Clear()
         $global:AdoBootstrapReleaseBody = @(
-            '## Agent Downloads', '| | Package | SHA-256 |', '| --- | --- | --- |', $standardPackageRow,
-            '## Alternate Agent Downloads', '| | Package | SHA-256 |', '| --- | --- | --- |', $alternatePackageRow
-        ) -join $newline
+            '<h2>Agent Downloads</h2><table><tbody>', $standardPackageRow, '</tbody></table>',
+            '<h2>Alternate Agent Downloads</h2><table><tbody>', $alternatePackageRow, '</tbody></table>'
+        ) -join "`n"
+        $global:AdoBootstrapReleaseBody = $global:AdoBootstrapReleaseBody.Replace("`n", $newline)
         & $bootstrapScript @bootstrapParameters
         Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.Sha256 -eq ('cd' * 32)) 'Alternate Windows x64 package interfered with standard package hash selection.'
         Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.DownloadUrl -eq 'https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip') 'Alternate Windows x64 package interfered with standard package URL selection.'
@@ -292,7 +300,7 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
         @{ Body = "$standardPackageRow`n$standardPackageRow"; Pattern = 'one standard Windows x64 package row' },
         @{ Body = $standardPackageRow.Replace(('cd' * 32), 'invalid'); Pattern = 'valid Windows x64 download URL and SHA256' },
         @{ Body = $standardPackageRow.Replace('/agent/5.0.0/', '/agent/5.0.1/'); Pattern = 'valid Windows x64 download URL and SHA256' },
-        @{ Body = $standardPackageRow.Replace('/vsts-agent-win-x64-5.0.0.zip)', '/vsts-agent-win-x64-5.0.1.zip)'); Pattern = 'valid Windows x64 download URL and SHA256' },
+        @{ Body = $standardPackageRow.Replace('/vsts-agent-win-x64-5.0.0.zip"', '/vsts-agent-win-x64-5.0.1.zip"'); Pattern = 'valid Windows x64 download URL and SHA256' },
         @{ Body = $standardPackageRow.Replace('download.agent.dev.azure.com', 'example.com'); Pattern = 'valid Windows x64 download URL and SHA256' }
     )) {
         $global:AdoBootstrapReleaseBody = $case.Body
@@ -312,6 +320,7 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
         @{ Mode = 'unauthorized'; Pattern = 'unauthorized' },
         @{ Mode = 'missing-pool'; Pattern = 'must exist' },
         @{ Mode = 'bad-hash'; Pattern = 'SHA256 hash' },
+        @{ Mode = 'release-unavailable'; Pattern = 'official Microsoft release fallback failed: Release page unavailable' },
         @{ Mode = 'busy'; Pattern = 'Readiness wait reached' },
         @{ Mode = 'offline'; Pattern = 'Readiness wait reached' },
         @{ Mode = 'missing-capability'; Pattern = 'Readiness wait reached' }
@@ -319,8 +328,8 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
         $global:AdoBootstrapMode = $case.Mode
         $deploymentsBeforeFailure = $global:AdoBootstrapDeploymentCount
         Assert-AdoFailure { & $bootstrapScript @bootstrapParameters } $case.Pattern
-        if ($case.Mode -eq 'busy') {
-            Assert-Ado ($global:AdoBootstrapDeploymentCount -eq $deploymentsBeforeFailure) 'Busy pool reached VM deployment.'
+        if ($case.Mode -in @('busy', 'release-unavailable')) {
+            Assert-Ado ($global:AdoBootstrapDeploymentCount -eq $deploymentsBeforeFailure) 'Failed bootstrap preflight reached VM deployment.'
         }
     }
 
