@@ -72,6 +72,10 @@ function global:az {
             }
             return $global:RunnerTestDeployment | ConvertTo-Json -Depth 10
         }
+        if ($global:RunnerTestMode -in @('shared-access-denied', 'shared-deployment-missing')) {
+            $global:LASTEXITCODE = 1
+            return
+        }
         return '{"privateEndpointSubnetId":{"value":"/subnets/private"},"privateDnsZoneIds":{"value":{"blob":"/zones/blob","dfs":"/zones/dfs","dev":"/zones/dev","sql":"/zones/sql"}}}'
     }
     if (($arguments -join ' ') -match '^synapse workspace show') {
@@ -168,6 +172,17 @@ try {
     Assert-RunnerTest ($deploy.Body.parameters.privateDnsZoneIds.value.sql -eq '/zones/sql') 'Shared SQL private DNS zone was not passed.'
     $parametersPath = @($deploy.Arguments | Where-Object { $_ -like '@*' })[0].Substring(1)
     Assert-RunnerTest (-not (Test-Path -LiteralPath $parametersPath)) 'Connectivity parameter file was not cleaned up.'
+
+    foreach ($mode in @('shared-access-denied', 'shared-deployment-missing')) {
+        $global:RunnerTestMode = $mode
+        $callCount = $global:RunnerTestCalls.Count
+        Assert-RunnerFailure {
+            & (Join-Path $scripts 'Set-SynapsePrivateConnectivity.ps1') -RunnerResourceGroup shared `
+                -EnvironmentResourceGroup dev -EnvironmentName dev -WorkspaceName $resolved.synapseWorkspaceName
+        } "Cannot read shared deployment 'shared-runner' in resource group 'shared'.*Azure CLI error above.*environment deployment identity Microsoft.Resources/deployments/read.*only if the deployment is confirmed missing"
+        Assert-RunnerTest ($global:RunnerTestCalls.Count -eq $callCount + 1) "Connectivity continued after failed shared deployment lookup ($mode)."
+    }
+    $global:RunnerTestMode = 'success'
 
     $env:RUNNER_ADMIN_PASSWORD = 'unit-test-password'
     $deploymentScript = Join-Path $scripts 'Deploy-SharedRunner.ps1'

@@ -14,7 +14,9 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($RunnerResourceGroup)) { throw 'RUNNER_RESOURCE_GROUP must reference the bootstrapped shared resource group.' }
 
 $json = az deployment group show --resource-group $RunnerResourceGroup --name $SharedDeploymentName --query properties.outputs --output json
-if ($LASTEXITCODE -ne 0) { throw "Shared deployment '$SharedDeploymentName' is unavailable. Run Deploy shared runner first." }
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot read shared deployment '$SharedDeploymentName' in resource group '$RunnerResourceGroup'. See the Azure CLI error above. For AuthorizationFailed, grant the environment deployment identity Microsoft.Resources/deployments/read and connectivity deployment permissions on the shared runner resource group (not just the bootstrap identity), then rerun the pipeline after RBAC propagation. Run Deploy shared runner only if the deployment is confirmed missing; also verify the subscription and resource group."
+}
 $shared = $json | ConvertFrom-Json
 $json = az synapse workspace show --resource-group $EnvironmentResourceGroup --name $WorkspaceName --output json
 if ($LASTEXITCODE -ne 0) { throw "Cannot resolve workspace '$WorkspaceName' for private connectivity." }

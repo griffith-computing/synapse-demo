@@ -196,7 +196,8 @@ Do not add PR jobs or fork checkouts to it. Environment approval is not VM-level
    Approve CIDRs before the first deployment. `AzureBastionSubnet` must be /26 or larger.
    Do not change existing subnet address ranges without a separate network migration.
 5. Grant each environment deployment identity permissions for the shared connectivity deployment:
-   deployment read/write, private endpoint and zone-group create/read/write, subnet join,
+   deployment read/write (including `Microsoft.Resources/deployments/read` on `shared-runner`),
+   private endpoint and zone-group create/read/write, subnet join,
    DNS-zone join and any endpoint-created NIC operations. Also allow endpoint connection approval
    on its environment's Storage/Synapse resources. A dedicated custom role is preferable;
    Contributor on the shared RG is simpler for a PoC but grants VM control as well.
@@ -786,12 +787,16 @@ An ARM service connection does not provide private network access.
 1. Run manual bootstrap once and repeat it to verify idempotence. Confirm the Windows agent
    is online in the pool and has all three demanded capabilities. Failed commands remain in
    Azure for diagnosis; completed Run Command resources/local protected payloads are removed.
+   Before infrastructure deployment, grant each environment service connection's service
+   principal the shared-RG connectivity permissions in step 3 below. Bootstrap identity grants
+   and environment-RG grants do not grant the environment identity access to the shared RG.
 2. Run infrastructure deployment from main. Hosted bootstrap and packaging are independent;
    Deploy_Dev waits for both. The same verified infra package then promotes dev -> test -> prod.
    Each private job performs WIF-authenticated what-if/deployment, resolves canonical Bicep
    outputs, reconciles private endpoints/DNS, and verifies private DNS/TCP access.
 3. Give each environment deployment identity permission on the shared RG to read/deploy
-   connectivity, join the endpoint subnet/DNS zones, and create endpoints/zone groups/NICs,
+   connectivity, read the `shared-runner` deployment (`Microsoft.Resources/deployments/read`),
+   join the endpoint subnet/DNS zones, and create endpoints/zone groups/NICs,
    plus endpoint approval on target Storage/Synapse resources. Shared-RG Contributor is a
    broad PoC option; a custom connectivity role is preferable. Keep existing environment
    deployment/role-assignment and publication/data-plane grants.
@@ -924,6 +929,7 @@ performed as part of producing this documentation. Recommended live validation c
 |---|---|---|
 | `AADSTS70021: No matching federated identity record found` | Federated credential subject doesn't match the actual GitHub Environment/branch or ADO service connection issuer/subject | Re-check subject string matches exactly (case-sensitive), including environment name |
 | `AuthorizationFailed` on deployment | Deployment identity lacks role assignment at the resource group scope, or assignment hasn't propagated yet (can take a few minutes) | Confirm role assignment scope/role; wait and retry |
+| `AuthorizationFailed` for `Microsoft.Resources/deployments/read` on shared `shared-runner` deployment | The environment service connection identity lacks shared runner RG access; bootstrap identity access alone is insufficient | Have an RBAC administrator grant that service principal shared-RG Contributor (broad PoC option) or the approved custom connectivity role, including deployment reads and endpoint/DNS/subnet permissions. Reader alone cannot deploy connectivity. Wait for propagation and rerun the pipeline for fresh credentials. Only bootstrap again if the deployment is confirmed missing |
 | Pipeline succeeds but Synapse Studio unreachable | Public network access disabled, or agent/runner has no network path (private networking enabled) | Confirm `infra/parameters/<env>.bicepparam` networking values match intent; use a self-hosted agent with network access if private |
 | `what-if`/`validate` fails with resource provider error | Required resource provider not registered in subscription | Register providers listed in [customer-prerequisites.md](customer-prerequisites.md#1-azure-subscription-and-resource-group) |
 | Dedicated SQL pool cost higher than expected | Pool left running (not paused) | Ensure `enableDedicatedSqlPool` is `false` unless needed; pause pool manually if enabled; see [Cleanup](#cleanup) |

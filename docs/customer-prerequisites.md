@@ -185,10 +185,13 @@ Before the first infrastructure promotion:
   private endpoints targeting all environments. No public IP is assigned to the VM.
 - Grant the bootstrap identity Contributor on the shared resource group, plus subscription
   metadata reads for VM SKU and regional quota checks. Grant each environment deployment identity
+  `Microsoft.Resources/deployments/read` on the shared `shared-runner` deployment as well as
   permission to deploy/read the connectivity deployment, join the shared endpoint subnet and
   private DNS zones, create private endpoints/zone groups/NICs, and approve endpoint connections
   on its target Storage/Synapse resources. Shared-RG Contributor is a PoC alternative to a
   narrower custom connectivity role, but includes VM administration and weakens isolation.
+  These shared-RG grants must cover each environment service connection's service principal,
+  not only the runner bootstrap identity; environment-RG access does not extend to the shared RG.
 - Grant human jumpbox users the required Bastion/VM/NIC Reader permissions and provide the local
   VM credentials through an approved secret channel. Basic Bastion uses browser RDP; native
   client/tunneling features require a different Bastion SKU.
