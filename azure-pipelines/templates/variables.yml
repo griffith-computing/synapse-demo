@@ -12,7 +12,7 @@ variables:
   - name: runnerPool
     value: 'synapse-private'
   - name: runnerResourceGroup
-    value: 'rg-synapse-poc-ado-runner'
+    value: 'rg-synapse-poc-runner-wus3'
   - name: runnerLocation
     value: 'westus3'
   - name: runnerVmSize
