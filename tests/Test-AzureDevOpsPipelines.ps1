@@ -214,6 +214,9 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     $global:AdoBootstrapDeploymentCount = 0
     $global:AdoBootstrapMode = 'online'
     $global:AdoBootstrapHeaders = [Collections.Generic.List[string]]::new()
+    $standardPackageRow = "| Windows x64    | [vsts-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip) | $('cd' * 32) |"
+    $alternatePackageRow = "| Windows x64 | [pipelines-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/pipelines-agent-win-x64-5.0.0.zip) | $('ef' * 32) |"
+    $global:AdoBootstrapReleaseBody = $standardPackageRow
     function global:az {
         $global:LASTEXITCODE = 0
         '{"vmName":{"value":"private-agent"},"vmResourceId":{"value":"/vm/test"},"location":{"value":"westus3"}}'
@@ -238,8 +241,7 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
             return @{ value = @(@{ hashValue = $hash; downloadUrl = 'https://download.agent.dev.azure.com/agent/test.zip' }) }
         }
         if ($Uri -eq 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest') {
-            $hash = 'cd' * 32
-            return @{ body = "| Windows x64 | [vsts-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip) | $hash |" }
+            return @{ body = $global:AdoBootstrapReleaseBody }
         }
         $agent = [pscustomobject]@{
             name = 'private-agent'; enabled = $true; status = 'online'
@@ -275,6 +277,30 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     & $bootstrapScript @bootstrapParameters
     Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.Sha256 -eq ('cd' * 32)) 'Package-not-found response did not use the official release SHA256 fallback.'
     Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.DownloadUrl -eq 'https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip') 'Package-not-found response did not use the official Windows x64 release URL.'
+    foreach ($newline in @("`n", "`r`n")) {
+        $global:AdoBootstrapCommands.Clear()
+        $global:AdoBootstrapReleaseBody = @(
+            '## Agent Downloads', '| | Package | SHA-256 |', '| --- | --- | --- |', $standardPackageRow,
+            '## Alternate Agent Downloads', '| | Package | SHA-256 |', '| --- | --- | --- |', $alternatePackageRow
+        ) -join $newline
+        & $bootstrapScript @bootstrapParameters
+        Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.Sha256 -eq ('cd' * 32)) 'Alternate Windows x64 package interfered with standard package hash selection.'
+        Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.DownloadUrl -eq 'https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip') 'Alternate Windows x64 package interfered with standard package URL selection.'
+    }
+    foreach ($case in @(
+        @{ Body = $alternatePackageRow; Pattern = 'one standard Windows x64 package row' },
+        @{ Body = "$standardPackageRow`n$standardPackageRow"; Pattern = 'one standard Windows x64 package row' },
+        @{ Body = $standardPackageRow.Replace(('cd' * 32), 'invalid'); Pattern = 'valid Windows x64 download URL and SHA256' },
+        @{ Body = $standardPackageRow.Replace('/agent/5.0.0/', '/agent/5.0.1/'); Pattern = 'valid Windows x64 download URL and SHA256' },
+        @{ Body = $standardPackageRow.Replace('/vsts-agent-win-x64-5.0.0.zip)', '/vsts-agent-win-x64-5.0.1.zip)'); Pattern = 'valid Windows x64 download URL and SHA256' },
+        @{ Body = $standardPackageRow.Replace('download.agent.dev.azure.com', 'example.com'); Pattern = 'valid Windows x64 download URL and SHA256' }
+    )) {
+        $global:AdoBootstrapReleaseBody = $case.Body
+        $deploymentsBeforeFailure = $global:AdoBootstrapDeploymentCount
+        $global:AdoBootstrapCommands.Clear()
+        Assert-AdoFailure { & $bootstrapScript @bootstrapParameters } $case.Pattern
+        Assert-Ado ($global:AdoBootstrapDeploymentCount -eq $deploymentsBeforeFailure -and $global:AdoBootstrapCommands.Count -eq 0) 'Invalid release metadata reached VM deployment or agent commands.'
+    }
     $global:AdoBootstrapMode = 'online'
     $global:AdoBootstrapHeaders.Clear()
     & $bootstrapScript @bootstrapParameters -RegistrationAuth PAT
@@ -322,5 +348,5 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
         Remove-Item "Function:\global:$name" -ErrorAction SilentlyContinue
     }
     Remove-Variable AdoTestArchive, AdoTestDownloads, AdoTestStarts, AdoTestRestarts, AdoTestServiceStatus -Scope Global -ErrorAction SilentlyContinue
-    Remove-Variable AdoBootstrapCommands, AdoBootstrapDeploymentCount, AdoBootstrapMode, AdoBootstrapHeaders -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable AdoBootstrapCommands, AdoBootstrapDeploymentCount, AdoBootstrapMode, AdoBootstrapHeaders, AdoBootstrapReleaseBody -Scope Global -ErrorAction SilentlyContinue
 }

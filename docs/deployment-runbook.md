@@ -829,6 +829,11 @@ restrictions, and queuing under an exclusive lock. Test artifact-only and infras
 path filters separately. Do not claim live acceptance from offline test results.
 
 For failures, inspect pool/queue authorization and the selected registration identity first.
+If ADO cannot find the agent package, bootstrap falls back to Microsoft's latest GitHub release
+metadata, selecting the standard `vsts-agent-win-x64` package rather than the alternate
+`pipelines-agent` package. It requires a unique standard Windows x64 row with a matching
+official download URL and SHA256; missing, ambiguous, or invalid metadata stops bootstrap
+before VM deployment.
 Check the `vstsagent.*` service, machine PATH/PowerShell 7/Azure CLI/Bicep, and required capabilities
 if jobs remain queued. Repair a mismatched registration explicitly rather than using `--replace`.
 For private-path failures, check endpoint approval, private DNS zone groups/VNet links, shared-RG

@@ -46,9 +46,9 @@ Wait-IdleAgentPool
 function Get-LatestOfficialWindowsAgentPackage {
     $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest' `
         -Headers @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-    $windowsRows = @($release.body -split "`r?`n" | Where-Object { $_ -match '^\|\s*Windows x64\s*\|' })
+    $windowsRows = @($release.body -split "`r?`n" | Where-Object { $_ -match '^\|\s*Windows x64\s*\|\s*\[vsts-agent-win-x64-' })
     if ($windowsRows.Count -ne 1) {
-        throw 'Microsoft agent release metadata did not contain one Windows x64 package row.'
+        throw 'Microsoft agent release metadata did not contain one standard Windows x64 package row.'
     }
     $match = [regex]::Match(
         $windowsRows[0],
@@ -70,7 +70,8 @@ try {
     $packages = Invoke-RestMethod -Uri "$baseUrl/_apis/distributedtask/packages/agent?platform=win-x64&`$top=1&api-version=7.1-preview.1" -Headers $headers
     $package = @($packages.value)
 } catch {
-    $lookupError = "$($_.Exception.Message) $($_.ErrorDetails.Message)"
+    $lookupError = $_.Exception.Message
+    if ($_.ErrorDetails) { $lookupError += " $($_.ErrorDetails.Message)" }
     if ($lookupError -notmatch 'PackageNotFoundException|A package with the type agent could not be found') { throw }
     Write-Warning 'Azure DevOps did not return agent package metadata; using the official Microsoft agent release metadata.'
     try {
