@@ -227,6 +227,9 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
             return @{ value = @(@{ name = 'synapse-private'; id = 7 }) }
         }
         if ($Uri -match '/packages/') {
+            if ($Uri -cne 'https://dev.azure.com/example/_apis/distributedtask/packages/agent/win-x64?$top=1&api-version=7.1-preview.1') {
+                throw 'Agent package lookup must use the Windows x64 platform route and request one package.'
+            }
             $hash = ('ab-' * 31) + 'ab'
             if ($global:AdoBootstrapMode -eq 'bad-hash') { $hash = '' }
             return @{ value = @(@{ hashValue = $hash; downloadUrl = 'https://download.agent.dev.azure.com/agent/test.zip' }) }

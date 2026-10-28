@@ -757,7 +757,9 @@ longer required.
   Administrator permission on only the intended pool. There is no automatic credential
   fallback. Revoke it after bootstrap; supply a fresh credential for later bootstrap runs.
   The registered agent uses its own listener/job credentials, not the bootstrap PAT.
-- Bootstrap obtains Windows x64 agent metadata from ADO, validates the official HTTPS download
+- Bootstrap obtains Windows x64 agent metadata from ADO's
+  `/_apis/distributedtask/packages/agent/win-x64` route (the platform is a path segment,
+  not a query parameter), validates the official HTTPS download
   host and SHA256, installs shared prerequisites without installing a GitHub runner, and
   registers a Network Service Windows service. The token is sent only in protected managed
   Run Command parameters and a temporary guest environment variable, not command-line arguments.
