@@ -25,6 +25,7 @@ Missing items are the most common cause of delay on day-of deployment.
 |---|---|---|
 | Azure subscription and target resource group | Must already exist; required providers must be registered | Must exist and contain the deployed workspace |
 | Shared Windows GitHub runner | Shared resource group, OIDC and GitHub App configuration must exist; Deploy bootstraps the runner before environment jobs | Runner must be online and environment private connectivity must already be deployed |
+| Private Windows ADO agent | Dedicated ADO runner group, WIF connection, pool/queue and registration permissions must exist; Deploy bootstraps the agent | Agent must be online with private capabilities and environment connectivity already deployed |
 | Entra App Registration, service principal, and federated credential | Must be configured with the deployment permissions below | Must be configured for the publishing identity, with workspace and storage data-plane permissions |
 | Synapse workspace and its system-assigned managed identity | Created by the infrastructure template; do not manually pre-create for a new environment | Must already exist; run infrastructure deployment first |
 | ADLS Gen2 storage account and filesystems | Template creates the account, workspace default filesystem, and `raw`/`curated` filesystems | Must already exist; publication uploads sample data into `raw` |
@@ -122,9 +123,25 @@ the reusable workflow does not automatically receive all repository secrets.
 - [ ] Create and authorize a workload-identity-federated Azure Resource Manager service
       connection for each environment, scoped to its target resource group.
 - [ ] Set the service connection names, subscription IDs, resource group names, and actual
-      workspace names in [the shared pipeline variables](../azure-pipelines/templates/variables.yml)
-      or the supported pipeline overrides; replace all placeholder values.
-- [ ] Create Azure DevOps Environments matching the deployment stages and configure approvals.
+      runner settings in [the shared pipeline variables](../azure-pipelines/templates/variables.yml);
+      replace all placeholders. Workspace names come from Bicep outputs. Service connection and
+      pool names must be configured in YAML for compile-time authorization.
+- [ ] Keep source in GitHub and authorize the ADO GitHub integration for checkout/PR status checks.
+- [ ] Create a dedicated ADO shared runner resource group and the runner WIF service connection;
+      grant bootstrap shared-RG Contributor and subscription SKU/quota metadata reads.
+- [ ] Pre-create the private Windows agent pool/project queue and authorize only the intended
+      release/rollback pipelines. Give the bootstrap build-service identity pool-scoped
+      Administrator permission for default `JobToken` registration. If prohibited, explicitly
+      choose `PAT` and supply short-lived secret `runnerRegistrationPat` with Agent Pools
+      (read, manage), owned by an identity administering only that pool.
+- [ ] Set secret `runnerAdminPassword` on bootstrap and infrastructure pipelines; define
+      registration fallback secrets only when PAT mode is selected. Follow the
+      [ADO bootstrap procedure](deployment-runbook.md#bootstrap-identity-settings-and-registration).
+- [ ] Create Azure DevOps Environments `runner`, `dev`, `test`, and `prod`; configure approvals,
+      protected-main branch control, and exclusive-lock checks. Restrict secrets and private
+      pools from untrusted/fork PRs; validation stays hosted.
+- [ ] Set both release pipeline definition IDs and retain release runs/artifacts for at least
+      90 days so manual rollback can fetch known-good packages.
 - [ ] Define secret pipeline variables `sqlAdministratorPassword.dev`,
       `sqlAdministratorPassword.test`, and `sqlAdministratorPassword.prod` for infrastructure
       deployment. Do not commit passwords to parameter files or variable templates.
@@ -155,8 +172,10 @@ Grant resource-specific and data-plane permissions at the narrower scopes listed
 
 ## 4. Network and firewall
 
-GitHub deployment/publication now requires the shared Windows runner. Before the first
-infrastructure promotion:
+Both platforms' deployment/publication jobs require a private Windows runner/agent. GitHub uses
+the runner procedure below; ADO uses the same topology in a separate resource group via the
+[ADO bootstrap procedure](deployment-runbook.md#bootstrap-identity-settings-and-registration).
+Before the first infrastructure promotion:
 
 - Have an administrator create a dedicated shared resource group in West US 3.
 - Configure the protected GitHub `runner` Environment, its OIDC identity, GitHub App credentials,
@@ -179,6 +198,12 @@ infrastructure promotion:
   obtain the required egress exceptions before bootstrap.
 - Keep untrusted PRs on GitHub-hosted agents. A persistent runner shared across dev/test/prod
   does not provide strong environment isolation; protect main and restrict deployment access.
+
+For ADO, approve outbound agent/artifact/log/download endpoints in addition to GitHub checkout,
+Azure and installer endpoints. Grant environment identities the same shared connectivity
+permissions listed above in the **ADO** runner group. Keep the runner and environment groups in
+the same subscription for the current helper scripts. Use only one CI platform as deployment
+authority per environment: GitHub and ADO environment locks do not coordinate across platforms.
 
 - [ ] Confirm whether **public network access** is acceptable for the PoC (default assumption —
       see [demo-script.md](demo-script.md#poc-shortcuts-vs-production-hardening)) or whether

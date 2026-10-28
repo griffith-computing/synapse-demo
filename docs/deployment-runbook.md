@@ -139,7 +139,7 @@ the artifact pipeline can seed the packaged raw sample CSV.
 resource-group-derived suffix. A deployment label or a GitHub variable does not override that
 resource name. Both pipeline platforms now deploy under the stable ARM deployment name
 `synapse-<env>` (for example, `synapse-dev`), and artifact publication/rollback resolve that exact
-deployment with `scripts/Get-SynapseDeploymentOutputs.ps1`. GitHub private connectivity and
+deployment with `scripts/Get-SynapseDeploymentOutputs.ps1`. Both platforms' private connectivity and
 preflight checks use those same outputs. No `SYNAPSE_WORKSPACE_NAME` GitHub variable or
 `workspaceName.*` Azure DevOps variable is required.
 
@@ -158,7 +158,8 @@ their exact `$deploymentName` instead and do not update the pipeline's canonical
 ### Shared Windows jumpbox and GitHub runner
 
 GitHub deploy/publish/rollback execution requires one shared Windows runner. Packaging, PR
-validation, and shared bootstrap stay GitHub-hosted. Azure DevOps agent selection is unchanged.
+validation, and shared bootstrap stay GitHub-hosted. Azure DevOps uses its own private Windows
+agent and hosted bootstrap, described in [Deploying via Azure DevOps](#deploying-via-azure-devops).
 Run from protected `main`; configure environment deployment-branch restrictions and required
 reviewers for `runner`, `dev`, `test`, and `prod`. The shared runner is for trusted code only.
 Do not add PR jobs or fork checkouts to it. Environment approval is not VM-level isolation.
@@ -697,16 +698,142 @@ longer required.
 
 ## Deploying via Azure DevOps
 
-1. Register `azure-pipelines/deploy.yml` and `azure-pipelines/publish-artifacts.yml` as separate
-  Azure DevOps pipelines. Set their numeric definition IDs in `azure-pipelines/rollback.yml` and
-  `synapseArtifactPipelineId` in `azure-pipelines/templates/variables.yml` for prior-run downloads.
-2. Run the infrastructure pipeline first when provisioning or changing Azure resources. It
-  packages and deploys only `infra/`.
-3. Run the artifact pipeline after the workspace exists. It packages `synapse/`, `config/`, and `sample/`
-  once and promotes that package through the `Publish_Dev`, `Publish_Test`, and `Publish_Prod`
-  stages without invoking Bicep.
-4. Environment **checks/approvals** gate both streams. Path filters ensure ordinary artifact
-  updates do not trigger the infrastructure pipeline.
+### Register and protect the pipelines
+
+1. Connect the existing **GitHub repository** to the ADO project using its GitHub integration.
+   Authorize repository checkout and restrict repository/service-connection/pool use to the
+   intended pipelines. Source does not move to Azure Repos; existing GitHub Actions stay intact.
+2. Register these YAML entry points as separate pipelines:
+   - `azure-pipelines/validate.yml` (hosted PR/main offline checks);
+   - `azure-pipelines/deploy-runner.yml` (manual bootstrap/repair);
+   - `azure-pipelines/deploy.yml` (bootstrap, package, infra promotion);
+   - `azure-pipelines/publish-artifacts.yml` (package and artifact promotion);
+   - `azure-pipelines/rollback.yml` and `azure-pipelines/rollback-artifacts.yml` (manual).
+3. Replace placeholders in [the variable template](../azure-pipelines/templates/variables.yml).
+   Set `deployPipelineId` and `synapseArtifactPipelineId` to the respective numeric pipeline
+   definition IDs for prior-build downloads. Service-connection and agent-pool names are
+   compile-time YAML configuration: edit the template, not runtime/UI overrides.
+4. Pre-create an organization self-hosted pool named by `runnerPool`, expose it to this project,
+   and authorize only the four release/rollback pipelines that use it. Bootstrap itself uses
+   hosted Ubuntu and requires pool administration, not a private-agent job slot.
+5. Create ADO Environments `runner`, `dev`, `test`, and `prod`. Configure **Branch control**
+   to allow protected `refs/heads/main`, **Exclusive lock**, and required approvals (especially
+   test/prod). Templates use `lockBehavior: sequential`: a later run waits rather than canceling
+   an earlier run at the lock. Checks are configured in the UI, not created by YAML.
+6. Protect main in GitHub and require the ADO validation status. YAML PR triggers here apply
+   to the GitHub-connected repository. Disable fork access to secrets and protected resources.
+   Keep untrusted PRs on hosted agents. Explicit pool authorization and resource checks are
+   required even though mutating templates also contain main-branch conditions.
+
+### Bootstrap identity, settings, and registration
+
+- Have an administrator create `runnerResourceGroup` in the same subscription as the environment
+  resource groups. Use a dedicated ADO resource group/VM, not the existing GitHub runner's
+  group. The same Bicep topology is reused, not the GitHub runner registration.
+- Create the WIF ARM service connection named by `serviceConnection.runner`; authorize the
+  bootstrap and infrastructure pipelines. Grant shared-RG Contributor plus the subscription
+  SKU/quota metadata reads used by `Deploy-SharedRunner.ps1`.
+- Set the runner location, Windows VM size, admin username, and non-overlapping VNet/subnet
+  ranges in the variable template. Defaults are West US 3, Windows Server 2022 x64,
+  `Standard_B2as_v2`, and the same Bastion/NAT/private endpoint layout as the GitHub bootstrap.
+- Define secret `runnerAdminPassword` on both bootstrap and infrastructure pipelines. Define
+  `sqlAdministratorPassword.dev`, `.test`, and `.prod` on infrastructure deploy/rollback
+  pipelines. Share secrets through an explicitly authorized variable group if desired;
+  no variable group is referenced automatically.
+- `runnerRegistrationAuth: JobToken` is the default. Bootstrap explicitly maps
+  `System.AccessToken` and uses Bearer authentication for ADO REST. The Windows configuration
+  command accepts that OAuth token through `--auth pat` and `VSTS_AGENT_INPUT_TOKEN`, as documented
+  in [Windows agent unattended configuration](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/windows-agent?view=azure-devops#unattended-config).
+  Grant the job's actual build-service identity (normally `<project> Build Service (<org>)`
+  with project-scoped job authorization) **Administrator on this specific agent pool**.
+  Keep job authorization project-scoped; do not broaden organization-wide permissions.
+  This grant applies to every pipeline using that build identity, not just bootstrap.
+  Use it only in a trusted project; otherwise isolate bootstrap in a trusted project or use
+  the explicit PAT mode with a protected variable group and branch checks. A main-branch
+  condition in this template alone does not constrain other YAML using the same identity.
+- If customer policy prevents job-token pool administration, explicitly set
+  `runnerRegistrationAuth: PAT` and define secret `runnerRegistrationPat` on both bootstrap
+  callers. Use a short-lived PAT with **Agent Pools (read, manage)**, owned by an identity with
+  Administrator permission on only the intended pool. There is no automatic credential
+  fallback. Revoke it after bootstrap; supply a fresh credential for later bootstrap runs.
+  The registered agent uses its own listener/job credentials, not the bootstrap PAT.
+- Bootstrap obtains Windows x64 agent metadata from ADO, validates the official HTTPS download
+  host and SHA256, installs shared prerequisites without installing a GitHub runner, and
+  registers a Network Service Windows service. The token is sent only in protected managed
+  Run Command parameters and a temporary guest environment variable, not command-line arguments.
+  The service exposes `SYNAPSE_PRIVATE_AGENT=true`; jobs demand this plus Windows x64.
+- A matching running registration is reused without restarting it; a stopped matching service
+  is started. A different organization/pool/name is rejected. Bootstrap waits up to 15 minutes
+  for assigned pool work before provisioning; drain the pool before planned maintenance or
+  VM configuration changes so new work cannot race setup. Main-branch infra CI is batched
+  behind an active infra run. Bootstrap polls the
+  exact agent's online/enabled status and capabilities and fails after a bounded wait.
+
+Azure deployment authentication remains WIF-based in both modes. Registration authorization is
+an ADO permission, not an Azure RBAC grant. A PAT fallback means bootstrap is not fully secret-free.
+Allow outbound HTTPS for Azure DevOps agent, artifact, log, and agent-download endpoints,
+GitHub checkout/releases, Entra ID, ARM, and Microsoft installers/updates; use Microsoft's
+[ADO networking guidance](https://learn.microsoft.com/en-us/azure/devops/organizations/security/allow-list-ip-url?view=azure-devops).
+An ARM service connection does not provide private network access.
+
+### Deploy, publish, and roll back
+
+1. Run manual bootstrap once and repeat it to verify idempotence. Confirm the Windows agent
+   is online in the pool and has all three demanded capabilities. Failed commands remain in
+   Azure for diagnosis; completed Run Command resources/local protected payloads are removed.
+2. Run infrastructure deployment from main. Hosted bootstrap and packaging are independent;
+   Deploy_Dev waits for both. The same verified infra package then promotes dev -> test -> prod.
+   Each private job performs WIF-authenticated what-if/deployment, resolves canonical Bicep
+   outputs, reconciles private endpoints/DNS, and verifies private DNS/TCP access.
+3. Give each environment deployment identity permission on the shared RG to read/deploy
+   connectivity, join the endpoint subnet/DNS zones, and create endpoints/zone groups/NICs,
+   plus endpoint approval on target Storage/Synapse resources. Shared-RG Contributor is a
+   broad PoC option; a custom connectivity role is preferable. Keep existing environment
+   deployment/role-assignment and publication/data-plane grants.
+4. Run artifact publication only after infrastructure and its private connectivity exist and
+   the publishing identity has workspace/storage data-plane access. It packages `synapse/`,
+   `config/`, and `sample/` once. Each private stage resolves outputs, verifies the private
+   path **before** upload/publication, seeds the sample, publishes, and runs resolved smoke
+   tests. It never bootstraps the VM or invokes Bicep.
+5. Run either manual rollback from main with `targetEnvironment`, an explicit `sourceRunId`,
+   and its exact `packageVersion`. Infrastructure rollback skips what-if, verifies/selects
+   the old infra package, redeploys, and reconciles/checks connectivity. Artifact rollback
+   republishes the old artifact package without changing infrastructure.
+
+All deployment jobs disable implicit artifact downloads and use build/job/attempt-specific
+temporary directories, rejecting ambiguous packages, version mismatches, and pre-existing
+extraction directories. The matching job directory is cleaned on completion. Configure ADO
+project/run **retention for at least 90 days**, including retained release runs, so rollback
+packages survive; GitHub's artifact retention field has no direct ADO YAML equivalent.
+
+Shared environment locks serialize both release streams and both rollback entry points **within
+ADO**. They do not coordinate with GitHub Actions locks. Designate one CI platform as deployment
+authority for a customer environment; do not run both platforms against the same environment
+concurrently. Unrelated GitHub Actions files have not been retired.
+
+### Validation and operations
+
+Offline checks compile both runner templates, run the existing runner topology tests, and run
+`tests/Test-AzureDevOpsPipelines.ps1` for pipeline contracts and mocked agent/package behavior.
+Preview/validate all six pipelines in the customer ADO project before execution, including both
+current/prior artifact branches and all environment parameter choices. Offline checks do not
+prove ADO template expansion, pool permissions, or live Azure access.
+
+Customer-attended acceptance must verify bootstrap/rerun, private endpoint DNS/TCP, identical
+package versions through dev/test/prod, smoke tests, both prior-build rollback paths, main/PR
+restrictions, and queuing under an exclusive lock. Test artifact-only and infrastructure/helper
+path filters separately. Do not claim live acceptance from offline test results.
+
+For failures, inspect pool/queue authorization and the selected registration identity first.
+Check the `vstsagent.*` service, machine PATH/PowerShell 7/Azure CLI/Bicep, and required capabilities
+if jobs remain queued. Repair a mismatched registration explicitly rather than using `--replace`.
+For private-path failures, check endpoint approval, private DNS zone groups/VNet links, shared-RG
+RBAC, and the canonical successful `synapse-<env>` deployment outputs. For rollback downloads,
+check pipeline definition ID, source run ID, build permissions, package version, and retention.
+Stop/reboot/update only the intended drained agent; keep automatic agent updates enabled.
+To retire ADO, remove its pool registration, revoke bootstrap credentials, and delete only its
+designated shared resource group after reviewing private endpoint dependencies. Do not remove
+GitHub's separate runner group or environment data as part of agent cleanup.
 
 ## Promotion across environments
 

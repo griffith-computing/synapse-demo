@@ -12,6 +12,7 @@ trigger:
       - main
 
 pr:
+  autoCancel: true
   branches:
     include:
       - main
@@ -33,3 +34,16 @@ steps:
         -ConfigFiles config/dev.json,config/test.json,config/prod.json
         -Offline
       pwsh: true
+
+  - pwsh: |
+      foreach ($template in @('infra/runner/main.bicep', 'infra/runner/connectivity.bicep')) {
+        az bicep build --file $template --outfile "$(Agent.TempDirectory)/$([IO.Path]::GetFileNameWithoutExtension($template)).json"
+        if ($LASTEXITCODE -ne 0) { throw "Bicep compilation failed: $template" }
+      }
+    displayName: Compile runner infrastructure
+
+  - pwsh: |
+      ./tests/Test-RunnerInfrastructure.ps1 -CompiledRunnerTemplate "$(Agent.TempDirectory)/main.json" `
+        -CompiledConnectivityTemplate "$(Agent.TempDirectory)/connectivity.json"
+      ./tests/Test-AzureDevOpsPipelines.ps1
+    displayName: Validate private agent orchestration and topology

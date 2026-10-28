@@ -12,6 +12,8 @@ parameters:
     type: string
   - name: serviceConnection
     type: string
+  - name: agentPool
+    type: string
   - name: resourceGroupName
     type: string
   - name: subscriptionId
@@ -30,7 +32,6 @@ parameters:
     default: ''
   - name: packageVersion
     type: string
-    default: ''
   - name: artifactName
     type: string
     default: synapse-artifacts-release
@@ -39,22 +40,43 @@ stages:
   - stage: ${{ parameters.stageName }}
     displayName: ${{ parameters.displayName }}
     dependsOn: ${{ parameters.dependsOn }}
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    lockBehavior: sequential
+    variables:
+      expectedPackageVersion: ${{ parameters.packageVersion }}
     jobs:
       - deployment: Publish
         displayName: ${{ parameters.displayName }}
         environment: ${{ parameters.environmentName }}
+        timeoutInMinutes: 60
+        variables:
+          packageRoot: $(Agent.TempDirectory)\synapse-artifacts-$(Build.BuildId)-$(System.JobId)-$(System.JobAttempt)
         pool:
-          vmImage: ubuntu-latest
+          name: ${{ parameters.agentPool }}
+          demands:
+            - Agent.OS -equals Windows_NT
+            - Agent.OSArchitecture -equals X64
+            - SYNAPSE_PRIVATE_AGENT -equals true
         strategy:
           runOnce:
             deploy:
               steps:
+                - download: none
                 - checkout: self
+                  clean: true
+
+                - pwsh: |
+                    if (Test-Path -LiteralPath "$(packageRoot)") { throw 'Job package directory already exists; retry as a new job attempt.' }
+                    New-Item -ItemType Directory -Path "$(packageRoot)" | Out-Null
+                  displayName: Create isolated package workspace
 
                 - ${{ if eq(parameters.downloadMode, 'current') }}:
-                    - download: current
-                      artifact: ${{ parameters.artifactName }}
+                    - task: DownloadPipelineArtifact@2
                       displayName: Download Synapse artifact package (current run)
+                      inputs:
+                        source: current
+                        artifact: ${{ parameters.artifactName }}
+                        path: $(packageRoot)\download
 
                 - ${{ if eq(parameters.downloadMode, 'specific') }}:
                     - task: DownloadPipelineArtifact@2
@@ -66,36 +88,28 @@ stages:
                         runVersion: specific
                         runId: ${{ parameters.sourceBuildId }}
                         artifact: ${{ parameters.artifactName }}
-                        path: $(Pipeline.Workspace)/${{ parameters.artifactName }}
+                        path: $(packageRoot)\download
 
-                - pwsh: |
-                    $packageDirectory = "$(Pipeline.Workspace)/${{ parameters.artifactName }}"
-                    $zip = Get-ChildItem -Path $packageDirectory -Filter *.zip | Select-Object -First 1
-                    $manifest = Get-ChildItem -Path $packageDirectory -Filter *.manifest.json | Select-Object -First 1
-                    if (-not $zip) { throw "No .zip package found in downloaded artifact." }
-                    if (-not $manifest) { throw "No .manifest.json found in downloaded artifact." }
-
-                    $expectedVersion = '${{ parameters.packageVersion }}'
-                    if ($expectedVersion) {
-                      $actualVersion = (Get-Content -LiteralPath $manifest.FullName -Raw | ConvertFrom-Json).Version
-                      if ($actualVersion -ne $expectedVersion) {
-                        throw "Downloaded package version '$actualVersion' does not match requested version '$expectedVersion'."
-                      }
-                    }
-
-                    Expand-Archive -LiteralPath $zip.FullName -DestinationPath "$(Pipeline.Workspace)/artifacts-extracted" -Force
-                    Write-Host "##vso[task.setvariable variable=artifactManifestPath]$($manifest.FullName)"
+                - task: PowerShell@2
                   displayName: Select and expand artifact package
+                  inputs:
+                    targetType: filePath
+                    filePath: $(Build.SourcesDirectory)\scripts\Expand-SynapsePipelinePackage.ps1
+                    arguments: >-
+                      -PackageDirectory "$(packageRoot)\download"
+                      -DestinationDirectory "$(packageRoot)\extracted"
+                      -ExpectedVersion "$(expectedPackageVersion)"
+                    pwsh: true
 
                 - task: PowerShell@2
                   displayName: Verify artifact package integrity
                   inputs:
                     targetType: filePath
-                    filePath: $(Build.SourcesDirectory)/scripts/Test-SynapseRepository.ps1
+                    filePath: $(Build.SourcesDirectory)\scripts\Test-SynapseRepository.ps1
                     arguments: >-
                       -RepositoryRoot "$(Build.SourcesDirectory)"
-                      -ArtifactManifestPath "$(artifactManifestPath)"
-                      -ArtifactBasePath "$(Pipeline.Workspace)/artifacts-extracted"
+                      -ArtifactManifestPath "$(manifestPath)"
+                      -ArtifactBasePath "$(packageRoot)\extracted"
                       -Offline
                     pwsh: true
 
@@ -106,11 +120,22 @@ stages:
                     scriptType: pscore
                     scriptLocation: inlineScript
                     inlineScript: |
-                      & "$(Build.SourcesDirectory)/scripts/Get-SynapseDeploymentOutputs.ps1" `
+                      & "$(Build.SourcesDirectory)\scripts\Get-SynapseDeploymentOutputs.ps1" `
                         -ResourceGroupName "${{ parameters.resourceGroupName }}" `
                         -DeploymentName "synapse-${{ parameters.environmentName }}" `
                         -SubscriptionId "${{ parameters.subscriptionId }}"
                     addSpnToEnvironment: true
+
+                - task: AzureCLI@2
+                  displayName: Verify environment private path
+                  inputs:
+                    azureSubscription: ${{ parameters.serviceConnection }}
+                    scriptType: pscore
+                    scriptLocation: scriptPath
+                    scriptPath: $(Build.SourcesDirectory)\scripts\Test-RunnerPrivateConnectivity.ps1
+                    arguments: >-
+                      -StorageAccountName "$(storageAccountName)"
+                      -WorkspaceName "$(synapseWorkspaceName)"
 
                 - task: AzureCLI@2
                   displayName: Seed raw sample data
@@ -123,7 +148,7 @@ stages:
                         --account-name "$(storageAccountName)" `
                         --file-system raw `
                         --path "sample/sample_customers.csv" `
-                        --source "$(Pipeline.Workspace)/artifacts-extracted/sample/raw/sample_customers.csv" `
+                        --source "$(packageRoot)\extracted\sample\raw\sample_customers.csv" `
                         --auth-mode login `
                         --overwrite true `
                         --only-show-errors
@@ -136,10 +161,10 @@ stages:
                     azureSubscription: ${{ parameters.serviceConnection }}
                     scriptType: pscore
                     scriptLocation: scriptPath
-                    scriptPath: $(Build.SourcesDirectory)/scripts/Publish-SynapseArtifacts.ps1
+                    scriptPath: $(Build.SourcesDirectory)\scripts\Publish-SynapseArtifacts.ps1
                     arguments: >-
-                      -ArtifactsRoot "$(Pipeline.Workspace)/artifacts-extracted/synapse"
-                      -ConfigFile "$(Pipeline.Workspace)/artifacts-extracted/config/${{ parameters.environmentName }}.json"
+                      -ArtifactsRoot "$(packageRoot)\extracted\synapse"
+                      -ConfigFile "$(packageRoot)\extracted\config\${{ parameters.environmentName }}.json"
                       -WorkspaceName "$(synapseWorkspaceName)"
                       -SubscriptionId "${{ parameters.subscriptionId }}"
                       -TokenValues "STORAGE_ACCOUNT_DFS_ENDPOINT=$(storageAccountDfsEndpoint)"
@@ -152,7 +177,7 @@ stages:
                     scriptType: pscore
                     scriptLocation: inlineScript
                     inlineScript: |
-                      $definitions = Get-Content "$(Build.SourcesDirectory)/tests/fixtures/smoke-tests.sample.json" -Raw | ConvertFrom-Json
+                      $definitions = Get-Content "$(Build.SourcesDirectory)\tests\fixtures\smoke-tests.sample.json" -Raw | ConvertFrom-Json
                       foreach ($definition in $definitions) {
                         if ($definition.Type -eq 'AzCommand') {
                           for ($index = 0; $index -lt $definition.Command.Count; $index++) {
@@ -162,8 +187,13 @@ stages:
                         }
                         if ($definition.Type -eq 'HttpCheck') { $definition.Url = '$(synapseWebEndpoint)' }
                       }
-                      $resolvedPath = "$(Agent.TempDirectory)/synapse-smoke-tests.json"
+                      $resolvedPath = "$(packageRoot)\synapse-smoke-tests.json"
                       $definitions | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $resolvedPath -Encoding UTF8
-                      & "$(Build.SourcesDirectory)/scripts/Invoke-SynapseSmokeTests.ps1" -TestDefinitionsPath $resolvedPath
+                      & "$(Build.SourcesDirectory)\scripts\Invoke-SynapseSmokeTests.ps1" -TestDefinitionsPath $resolvedPath
                       if ($LASTEXITCODE -ne 0) { throw "One or more Synapse smoke tests failed." }
                     addSpnToEnvironment: true
+
+                - pwsh: |
+                    if (Test-Path -LiteralPath "$(packageRoot)") { Remove-Item -LiteralPath "$(packageRoot)" -Recurse -Force }
+                  displayName: Clean job package workspace
+                  condition: always()

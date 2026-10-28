@@ -1,0 +1,12 @@
+# Manual repair/bootstrap entry point; infrastructure promotion uses the same stage.
+trigger: none
+pr: none
+
+variables:
+  - template: templates/variables.yml
+
+stages:
+  - template: templates/deploy-runner-stage.yml
+    parameters:
+      serviceConnection: ${{ variables['serviceConnection.runner'] }}
+      agentPool: ${{ variables.runnerPool }}

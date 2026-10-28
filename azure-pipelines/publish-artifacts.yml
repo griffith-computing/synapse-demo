@@ -18,6 +18,8 @@ trigger:
       - scripts/Get-SynapseDeploymentOutputs.ps1
       - scripts/Invoke-SynapseSmokeTests.ps1
       - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Expand-SynapsePipelinePackage.ps1
+      - scripts/Test-RunnerPrivateConnectivity.ps1
       - scripts/Publish-SynapseArtifacts.ps1
       - scripts/Test-SynapseRepository.ps1
       - tests/fixtures/smoke-tests.sample.json
@@ -67,10 +69,12 @@ stages:
       stageName: Publish_Dev
       displayName: Publish artifacts - dev
       environmentName: dev
-      serviceConnection: $(serviceConnection.dev)
+      serviceConnection: ${{ variables['serviceConnection.dev'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.dev)
       subscriptionId: $(subscriptionId.dev)
       artifactName: $(synapseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
         - Package
 
@@ -79,11 +83,14 @@ stages:
       stageName: Publish_Test
       displayName: Publish artifacts - test
       environmentName: test
-      serviceConnection: $(serviceConnection.test)
+      serviceConnection: ${{ variables['serviceConnection.test'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.test)
       subscriptionId: $(subscriptionId.test)
       artifactName: $(synapseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
+        - Package
         - Publish_Dev
 
   - template: templates/publish-artifacts-stage.yml
@@ -91,9 +98,12 @@ stages:
       stageName: Publish_Prod
       displayName: Publish artifacts - prod
       environmentName: prod
-      serviceConnection: $(serviceConnection.prod)
+      serviceConnection: ${{ variables['serviceConnection.prod'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.prod)
       subscriptionId: $(subscriptionId.prod)
       artifactName: $(synapseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
+        - Package
         - Publish_Test

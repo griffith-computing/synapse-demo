@@ -6,8 +6,9 @@ This PoC deploys an Azure Synapse Analytics workspace and its supporting resourc
 Infrastructure-as-Code (IaC), with a CI/CD layer that can run on **either** GitHub Actions or
 Azure DevOps Pipelines against the same `infra/`, `synapse/`, and `config/` sources. The two
 pipeline implementations are kept functionally equivalent so a customer can adopt whichever
-platform they already standardize on. GitHub deployment jobs additionally use the shared
-Windows runner described below; Azure DevOps agent networking remains independently configured.
+platform they already standardize on. Both use private Windows deployment execution and hosted
+bootstrap/packaging/PR validation. ADO reuses the shared network topology in a separate resource
+group with its own Azure Pipelines agent registration.
 
 ```
                  ┌─────────────────────────────────────────────────────┐
@@ -103,6 +104,18 @@ One persistent repository runner serializes work but is not a security boundary 
 environments. It must not run untrusted code. Runner/OS update responsibility belongs to the
 operator, and automatic runner updates must remain allowed.
 
+[ADO hosted bootstrap](../azure-pipelines/deploy-runner.yml) uses the same VM/network templates
+and protected Run Command helper, but installs a Windows Azure Pipelines agent rather than a
+GitHub runner. Registration uses the explicitly mapped job OAuth token with pool-scoped
+Administrator permission; a short-lived, scoped PAT is an explicit customer-policy fallback.
+Azure service connections remain WIF-based. Private jobs demand Windows x64 and
+`SYNAPSE_PRIVATE_AGENT=true`; bootstrap and PR validation do not consume this pool.
+ADO environment exclusive-lock checks plus `lockBehavior: sequential` serialize deployment,
+publication, and rollback per environment. These checks/approvals and pool authorization are
+configured outside YAML. Locks are not shared across CI platforms: select one active deployment
+authority per environment. Neither platform's persistent agent is an environment isolation
+boundary. See the [ADO setup and operations](deployment-runbook.md#deploying-via-azure-devops).
+
 ### Workload identity federation
 
 Both pipelines authenticate to Azure **without stored client secrets**:
@@ -162,9 +175,9 @@ all clients and runtime paths:
 - **Self-hosted integration runtime**: for on-premises or private source connectivity, the
   `synapse/` linked service definitions are structured so a self-hosted IR can be substituted for
   the Azure IR without changing pipeline/dataset definitions.
-- **Pipeline agents**: GitHub deployment jobs use the shared Windows runner. Azure DevOps needs
-  an independently network-connected agent for private data-plane access; an ARM service
-  connection alone does not provide network line of sight.
+- **Pipeline agents**: GitHub and ADO deployment jobs use their respective bootstrapped private
+  Windows runner/agent. Both reconcile/check the environment private path before data-plane
+  publication; an ARM service connection alone does not provide network line of sight.
 
 Disabling public access and hardening runtime-to-storage/Key Vault paths are separate from
 establishing the runner's private endpoint connectivity.

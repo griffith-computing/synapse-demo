@@ -1,13 +1,36 @@
 ##
 # Shared, non-secret placeholder variables for the Synapse PoC Azure
-# DevOps pipelines. Replace the placeholder values (or override them at
-# the pipeline/environment level in the ADO UI) with real values for your
+# DevOps pipelines. Replace these values in YAML with real values for your
 # subscription. None of these are secrets - they are resource identifiers
 # only. Actual Azure sign-in is performed via the WIF-based service
 # connections named below (Project Settings > Service connections),
 # which must be created out-of-band and require no client secret.
 ##
 variables:
+  - name: serviceConnection.runner
+    value: 'sc-synapse-runner-wif'
+  - name: runnerPool
+    value: 'synapse-private'
+  - name: runnerResourceGroup
+    value: 'rg-synapse-poc-ado-runner'
+  - name: runnerLocation
+    value: 'westus3'
+  - name: runnerVmSize
+    value: 'Standard_B2as_v2'
+  - name: runnerAdminUsername
+    value: 'runneradmin'
+  - name: runnerVnetCidr
+    value: '10.42.0.0/16'
+  - name: runnerBastionCidr
+    value: '10.42.0.0/26'
+  - name: runnerSubnetCidr
+    value: '10.42.1.0/24'
+  - name: runnerEndpointCidr
+    value: '10.42.2.0/24'
+  # JobToken requires the build identity's pool Administrator permission.
+  # PAT is an explicit fallback; it never replaces a failed job token silently.
+  - name: runnerRegistrationAuth
+    value: 'JobToken'
   # Azure Resource Manager service connections (type: Azure Resource
   # Manager, authentication: Workload Identity federation) - one per
   # environment so each can be scoped/approved independently.
@@ -40,5 +63,7 @@ variables:
     value: 'synapse-artifacts-release'
 
   # Numeric Azure DevOps pipeline definition ID used by artifact rollback.
+  - name: deployPipelineId
+    value: '0'
   - name: synapseArtifactPipelineId
     value: '0'

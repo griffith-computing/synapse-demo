@@ -2,9 +2,10 @@
 # Build-once, promote-everywhere deployment pipeline for the Synapse PoC
 # infra (Bicep) templates.
 #
-# Stage "Package" builds a single immutable, versioned release artifact
+# Hosted "Bootstrap" provisions/verifies the private Windows ADO agent.
+# Independently, "Package" builds a single immutable, versioned release artifact
 # from infra/ (scripts/New-SynapseReleasePackage.ps1). The SAME artifact
-# is then promoted through Dev -> Test -> Prod (no rebuild) via the
+# is then promoted through Dev -> Test -> Prod after bootstrap (no rebuild) via the
 # shared templates/deploy-stage.yml template, which applies each
 # environment's approvals/exclusive-lock checks (configured on the Azure
 # DevOps Environment resources named "dev", "test", "prod") and
@@ -14,6 +15,7 @@
 # azure-pipelines/publish-artifacts.yml after infrastructure exists.
 ##
 trigger:
+  batch: true
   branches:
     include:
       - main
@@ -21,11 +23,23 @@ trigger:
     include:
       - infra/**
       - azure-pipelines/deploy.yml
+      - azure-pipelines/deploy-runner.yml
+      - azure-pipelines/templates/deploy-runner-stage.yml
       - azure-pipelines/templates/deploy-stage.yml
       - azure-pipelines/templates/variables.yml
       - scripts/Common.psm1
       - scripts/Deploy-SynapseWorkspace.ps1
+      - scripts/Deploy-SharedRunner.ps1
+      - scripts/Initialize-GitHubRunner.ps1
+      - scripts/Initialize-AzureDevOpsAgent.ps1
+      - scripts/Register-AzureDevOpsAgent.ps1
+      - scripts/Invoke-AzureDevOpsAgentBootstrap.ps1
+      - scripts/Invoke-RunnerManagedCommand.ps1
+      - scripts/Set-SynapsePrivateConnectivity.ps1
+      - scripts/Test-RunnerPrivateConnectivity.ps1
+      - scripts/Get-SynapseDeploymentOutputs.ps1
       - scripts/New-SynapseReleasePackage.ps1
+      - scripts/Expand-SynapsePipelinePackage.ps1
       - scripts/Test-SynapseRepository.ps1
 
 pr: none
@@ -37,8 +51,14 @@ variables:
   - template: templates/variables.yml
 
 stages:
+  - template: templates/deploy-runner-stage.yml
+    parameters:
+      serviceConnection: ${{ variables['serviceConnection.runner'] }}
+      agentPool: ${{ variables.runnerPool }}
+
   - stage: Package
     displayName: Build immutable infra release package
+    dependsOn: []
     jobs:
       - job: Package
         displayName: Package infra release
@@ -73,23 +93,29 @@ stages:
       stageName: Deploy_Dev
       displayName: Deploy - dev
       environmentName: dev
-      serviceConnection: $(serviceConnection.dev)
+      serviceConnection: ${{ variables['serviceConnection.dev'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.dev)
       subscriptionId: $(subscriptionId.dev)
       artifactName: $(releaseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
         - Package
+        - Bootstrap
 
   - template: templates/deploy-stage.yml
     parameters:
       stageName: Deploy_Test
       displayName: Deploy - test
       environmentName: test
-      serviceConnection: $(serviceConnection.test)
+      serviceConnection: ${{ variables['serviceConnection.test'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.test)
       subscriptionId: $(subscriptionId.test)
       artifactName: $(releaseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
+        - Package
         - Deploy_Dev
 
   - template: templates/deploy-stage.yml
@@ -97,9 +123,12 @@ stages:
       stageName: Deploy_Prod
       displayName: Deploy - prod
       environmentName: prod
-      serviceConnection: $(serviceConnection.prod)
+      serviceConnection: ${{ variables['serviceConnection.prod'] }}
+      agentPool: ${{ variables.runnerPool }}
       resourceGroupName: $(resourceGroup.prod)
       subscriptionId: $(subscriptionId.prod)
       artifactName: $(releaseArtifactName)
+      packageVersion: $[ stageDependencies.Package.Package.outputs['meta.releaseVersion'] ]
       dependsOn:
+        - Package
         - Deploy_Test

@@ -52,6 +52,14 @@ Both supported CI platforms use two independent build-once, promote-everywhere r
 Infrastructure and Synapse artifacts also have separate rollback entry points, so a prior artifact
 package can be republished without changing Azure resources.
 
+For Azure DevOps, source remains in GitHub. Hosted bootstrap provisions a private Windows agent
+using the shared VM/network templates; deployment/publication and both rollback paths run on
+that protected pool. Packaging and PR validation remain hosted. Follow the
+[ADO setup procedure](docs/deployment-runbook.md#deploying-via-azure-devops) for pool permissions,
+WIF connections, registration authentication, approvals/locks, secrets, and artifact retention.
+GitHub Actions remain available, but designate one deployment platform per customer environment;
+the platforms' environment locks do not coordinate with each other.
+
 ## Documentation set
 
 - [docs/architecture.md](docs/architecture.md) — components, identity/RBAC model, environment

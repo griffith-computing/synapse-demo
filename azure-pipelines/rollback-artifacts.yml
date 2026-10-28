@@ -34,7 +34,8 @@ stages:
           stageName: Rollback_Artifacts_Dev
           displayName: Rollback artifacts - dev
           environmentName: dev
-          serviceConnection: $(serviceConnection.dev)
+          serviceConnection: ${{ variables['serviceConnection.dev'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.dev)
           subscriptionId: $(subscriptionId.dev)
           artifactName: $(synapseArtifactName)
@@ -49,7 +50,8 @@ stages:
           stageName: Rollback_Artifacts_Test
           displayName: Rollback artifacts - test
           environmentName: test
-          serviceConnection: $(serviceConnection.test)
+          serviceConnection: ${{ variables['serviceConnection.test'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.test)
           subscriptionId: $(subscriptionId.test)
           artifactName: $(synapseArtifactName)
@@ -64,7 +66,8 @@ stages:
           stageName: Rollback_Artifacts_Prod
           displayName: Rollback artifacts - prod
           environmentName: prod
-          serviceConnection: $(serviceConnection.prod)
+          serviceConnection: ${{ variables['serviceConnection.prod'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.prod)
           subscriptionId: $(subscriptionId.prod)
           artifactName: $(synapseArtifactName)

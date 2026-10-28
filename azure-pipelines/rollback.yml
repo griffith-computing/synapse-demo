@@ -16,7 +16,7 @@
 #     by deploy.yml's Package stage for that run)
 #
 # ASSUMPTION: the Deploy pipeline (azure-pipelines/deploy.yml) has a numeric
-# pipeline definition ID configured below. Replace the placeholder after
+# pipeline definition ID configured in templates/variables.yml. Replace the placeholder after
 # registering the pipeline.
 ##
 trigger: none
@@ -43,8 +43,6 @@ pool:
 
 variables:
   - template: templates/variables.yml
-  - name: deployPipelineId
-    value: '0'
 
 stages:
   - ${{ if eq(parameters.targetEnvironment, 'dev') }}:
@@ -53,7 +51,8 @@ stages:
           stageName: Rollback_Dev
           displayName: Rollback - dev
           environmentName: dev
-          serviceConnection: $(serviceConnection.dev)
+          serviceConnection: ${{ variables['serviceConnection.dev'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.dev)
           subscriptionId: $(subscriptionId.dev)
           artifactName: $(releaseArtifactName)
@@ -69,7 +68,8 @@ stages:
           stageName: Rollback_Test
           displayName: Rollback - test
           environmentName: test
-          serviceConnection: $(serviceConnection.test)
+          serviceConnection: ${{ variables['serviceConnection.test'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.test)
           subscriptionId: $(subscriptionId.test)
           artifactName: $(releaseArtifactName)
@@ -85,7 +85,8 @@ stages:
           stageName: Rollback_Prod
           displayName: Rollback - prod
           environmentName: prod
-          serviceConnection: $(serviceConnection.prod)
+          serviceConnection: ${{ variables['serviceConnection.prod'] }}
+          agentPool: ${{ variables.runnerPool }}
           resourceGroupName: $(resourceGroup.prod)
           subscriptionId: $(subscriptionId.prod)
           artifactName: $(releaseArtifactName)

@@ -87,6 +87,7 @@ add. Use this table verbatim if asked "what's different for production?":
 |---|---|---|
 | Networking | Public network access enabled on Synapse/storage/Key Vault for demo simplicity | Managed VNet + private endpoints for all data-plane resources; no public network access (see [architecture.md](architecture.md#private-networking-extension-points)) |
 | Identity scope | One deployment App Registration per environment, resource-group scoped | Formal identity governance: naming standards, ownership records, periodic access reviews, possibly PIM-eligible for any human-triggered stages |
+| Private CI execution | One persistent private Windows runner/agent shared across environments per CI platform; ADO registration uses job OAuth or an explicit short-lived PAT fallback | Isolated environment pools, controlled agent images/maintenance, and narrowly governed registration permissions |
 | Approvals | Environment approval gates optional/minimal in the PoC pipelines | Mandatory multi-approver gates before `prod`, branch protection, required status checks, signed commits |
 | Secrets/config | `config/*.json` kept simple and non-sensitive; secrets (if any) via pipeline variables | Centralized secret management (Key Vault references in pipeline variable groups), rotation policies |
 | Rollback | Redeploy known-good commit; no data-plane rollback | Backup/restore strategy for data-plane (storage soft-delete/versioning, SQL pool restore points), documented RTO/RPO |

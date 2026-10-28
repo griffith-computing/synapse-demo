@@ -1,7 +1,8 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]$RunnerDirectory = 'C:\actions-runner'
+    [string]$RunnerDirectory = 'C:\actions-runner',
+    [ValidateSet('GitHub', 'None')][string]$RunnerInstall = 'GitHub'
 )
 
 Set-StrictMode -Version Latest
@@ -76,6 +77,10 @@ if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 installation verification failed.
 & 'C:\Program Files\Git\cmd\git.exe' --version
 if ($LASTEXITCODE -ne 0) { throw 'Git installation verification failed.' }
 
+if ($RunnerInstall -eq 'None') {
+    Write-Host 'Windows agent prerequisites are installed.'
+    return
+}
 if (-not (Test-Path -LiteralPath (Join-Path $RunnerDirectory 'bin\Runner.Listener.exe'))) {
     $zip = Get-VerifiedReleaseAsset -Repository 'actions/runner' -AssetPattern '^actions-runner-win-x64-[\d.]+\.zip$'
     New-Item -ItemType Directory -Path $RunnerDirectory -Force | Out-Null
