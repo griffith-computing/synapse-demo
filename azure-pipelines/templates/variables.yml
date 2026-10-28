@@ -16,7 +16,7 @@ variables:
   - name: runnerLocation
     value: 'westus3'
   - name: runnerVmSize
-    value: 'Standard_B2as_v2'
+    value: 'Standard_D2s_v7'
   - name: runnerAdminUsername
     value: 'runneradmin'
   - name: runnerVnetCidr
