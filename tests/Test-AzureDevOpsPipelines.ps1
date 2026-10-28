@@ -220,7 +220,7 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     }
     function global:Invoke-RestMethod {
         param($Uri, $Headers)
-        $global:AdoBootstrapHeaders.Add($Headers.Authorization)
+        if ($Uri -notlike 'https://api.github.com/*') { $global:AdoBootstrapHeaders.Add($Headers.Authorization) }
         if ($global:AdoBootstrapMode -eq 'unauthorized') { throw 'Registration identity is unauthorized.' }
         if ($Uri -match '/pools\?') {
             if ($global:AdoBootstrapMode -eq 'missing-pool') { return @{ value = @() } }
@@ -230,9 +230,16 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
             if ($Uri -cne 'https://dev.azure.com/example/_apis/distributedtask/packages/agent?platform=win-x64&$top=1&api-version=7.1-preview.1') {
                 throw 'Agent package lookup must pass the Windows x64 platform as a query parameter and request one package.'
             }
+            if ($global:AdoBootstrapMode -eq 'package-not-found') {
+                throw 'A package with the type agent could not be found.'
+            }
             $hash = ('ab-' * 31) + 'ab'
             if ($global:AdoBootstrapMode -eq 'bad-hash') { $hash = '' }
             return @{ value = @(@{ hashValue = $hash; downloadUrl = 'https://download.agent.dev.azure.com/agent/test.zip' }) }
+        }
+        if ($Uri -eq 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest') {
+            $hash = 'cd' * 32
+            return @{ body = "| Windows x64 | [vsts-agent-win-x64-5.0.0.zip](https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip) | $hash |" }
         }
         $agent = [pscustomobject]@{
             name = 'private-agent'; enabled = $true; status = 'online'
@@ -263,6 +270,12 @@ $global:AdoBootstrapCommands.Add(@{ Name = $Name; ScriptPath = $ScriptPath; Para
     $global:AdoBootstrapMode = 'busy-once'
     & $bootstrapScript @bootstrapParameters
     Assert-Ado ($global:AdoBootstrapMode -eq 'online' -and $global:AdoBootstrapDeploymentCount -eq 2) 'Bootstrap did not resume after assigned work drained.'
+    $global:AdoBootstrapCommands.Clear()
+    $global:AdoBootstrapMode = 'package-not-found'
+    & $bootstrapScript @bootstrapParameters
+    Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.Sha256 -eq ('cd' * 32)) 'Package-not-found response did not use the official release SHA256 fallback.'
+    Assert-Ado ($global:AdoBootstrapCommands[1].Parameters.DownloadUrl -eq 'https://download.agent.dev.azure.com/agent/5.0.0/vsts-agent-win-x64-5.0.0.zip') 'Package-not-found response did not use the official Windows x64 release URL.'
+    $global:AdoBootstrapMode = 'online'
     $global:AdoBootstrapHeaders.Clear()
     & $bootstrapScript @bootstrapParameters -RegistrationAuth PAT
     Assert-Ado (@($global:AdoBootstrapHeaders | Where-Object { $_ -notlike 'Basic *' }).Count -eq 0) 'Explicit PAT mode did not use Basic REST authentication.'

@@ -43,8 +43,42 @@ function Wait-IdleAgentPool {
     throw "Pool '$PoolName' is still busy. Drain it before bootstrapping."
 }
 Wait-IdleAgentPool
-$packages = Invoke-RestMethod -Uri "$baseUrl/_apis/distributedtask/packages/agent?platform=win-x64&`$top=1&api-version=7.1-preview.1" -Headers $headers
-$package = @($packages.value)
+function Get-LatestOfficialWindowsAgentPackage {
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest' `
+        -Headers @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+    $windowsRows = @($release.body -split "`r?`n" | Where-Object { $_ -match '^\|\s*Windows x64\s*\|' })
+    if ($windowsRows.Count -ne 1) {
+        throw 'Microsoft agent release metadata did not contain one Windows x64 package row.'
+    }
+    $match = [regex]::Match(
+        $windowsRows[0],
+        '^\|\s*Windows x64\s*\|\s*\[(?<file>vsts-agent-win-x64-(?<version>\d+(?:\.\d+)+)\.zip)\]\(https://download\.agent\.dev\.azure\.com/agent/(?<urlVersion>\d+(?:\.\d+)+)/(?<urlFile>vsts-agent-win-x64-[0-9.]+\.zip)\)\s*\|\s*(?<hash>[a-fA-F0-9]{64})\s*\|$'
+    )
+    if (-not $match.Success -or
+        $match.Groups['version'].Value -ne $match.Groups['urlVersion'].Value -or
+        $match.Groups['file'].Value -ne $match.Groups['urlFile'].Value) {
+        throw 'Microsoft agent release metadata did not contain a valid Windows x64 download URL and SHA256.'
+    }
+    return [pscustomobject]@{
+        downloadUrl = "https://download.agent.dev.azure.com/agent/$($match.Groups['urlVersion'].Value)/$($match.Groups['urlFile'].Value)"
+        hashValue = $match.Groups['hash'].Value
+    }
+}
+
+$package = $null
+try {
+    $packages = Invoke-RestMethod -Uri "$baseUrl/_apis/distributedtask/packages/agent?platform=win-x64&`$top=1&api-version=7.1-preview.1" -Headers $headers
+    $package = @($packages.value)
+} catch {
+    $lookupError = "$($_.Exception.Message) $($_.ErrorDetails.Message)"
+    if ($lookupError -notmatch 'PackageNotFoundException|A package with the type agent could not be found') { throw }
+    Write-Warning 'Azure DevOps did not return agent package metadata; using the official Microsoft agent release metadata.'
+    try {
+        $package = @(Get-LatestOfficialWindowsAgentPackage)
+    } catch {
+        throw "Azure DevOps agent package lookup failed, and the official Microsoft release fallback failed: $($_.Exception.Message)"
+    }
+}
 if ($package.Count -ne 1) { throw 'Azure DevOps returned no unique Windows x64 agent package.' }
 $packageHash = $package[0].hashValue -replace '-', ''
 if ($packageHash -notmatch '^[a-fA-F0-9]{64}$') {

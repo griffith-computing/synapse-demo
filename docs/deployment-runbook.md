@@ -741,7 +741,7 @@ longer required.
   pipelines. Share secrets through an explicitly authorized variable group if desired;
   no variable group is referenced automatically.
 - `runnerRegistrationAuth: JobToken` is the default. Bootstrap explicitly maps
-  `System.AccessToken` and uses Bearer authentication for ADO REST. The Windows configuration
+  `System.AccessToken` as a bearer token for ADO REST. The Windows configuration
   command accepts that OAuth token through `--auth pat` and `VSTS_AGENT_INPUT_TOKEN`, as documented
   in [Windows agent unattended configuration](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/windows-agent?view=azure-devops#unattended-config).
   Grant the job's actual build-service identity (normally `<project> Build Service (<org>)`
@@ -758,8 +758,11 @@ longer required.
   fallback. Revoke it after bootstrap; supply a fresh credential for later bootstrap runs.
   The registered agent uses its own listener/job credentials, not the bootstrap PAT.
 - Bootstrap obtains Windows x64 agent metadata from ADO's
-  `/_apis/distributedtask/packages/agent?platform=win-x64` route, validates the official HTTPS download
-  host and SHA256, installs shared prerequisites without installing a GitHub runner, and
+  `/_apis/distributedtask/packages/agent?platform=win-x64` route. If ADO reports that the
+  agent package type cannot be found, bootstrap falls back to the latest Windows x64 release
+  metadata from `microsoft/azure-pipelines-agent` on GitHub. Ensure the hosted job can reach
+  `api.github.com`; both paths validate the official HTTPS download host and SHA256 before
+  installing shared prerequisites without installing a GitHub runner, then
   registers a Network Service Windows service. The token is sent only in protected managed
   Run Command parameters and a temporary guest environment variable, not command-line arguments.
   The service exposes `SYNAPSE_PRIVATE_AGENT=true`; jobs demand this plus Windows x64.
