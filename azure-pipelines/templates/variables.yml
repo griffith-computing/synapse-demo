@@ -43,18 +43,18 @@ variables:
 
   # Per-environment Azure resource placeholders.
   - name: resourceGroup.dev
-    value: 'rg-synapse-poc-dev'
+    value: 'rg-synapse-poc-dev2-wus3'
   - name: resourceGroup.test
-    value: 'rg-synapse-poc-test'
+    value: 'rg-synapse-poc-test-wus3'
   - name: resourceGroup.prod
-    value: 'rg-synapse-poc-prod'
+    value: 'rg-synapse-poc-prod-wus3'
 
   - name: subscriptionId.dev
-    value: '00000000-0000-0000-0000-000000000000'
+    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
   - name: subscriptionId.test
-    value: '00000000-0000-0000-0000-000000000000'
+    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
   - name: subscriptionId.prod
-    value: '00000000-0000-0000-0000-000000000000'
+    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
 
   - name: releaseArtifactName
     value: 'synapse-infra-release'
