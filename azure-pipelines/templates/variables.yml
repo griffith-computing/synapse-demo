@@ -50,11 +50,11 @@ variables:
     value: 'rg-synapse-poc-prod-wus3'
 
   - name: subscriptionId.dev
-    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
+    value: '00000000-0000-0000-0000-000000000000'
   - name: subscriptionId.test
-    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
+    value: '00000000-0000-0000-0000-000000000000'
   - name: subscriptionId.prod
-    value: '014ddcb6-d6a1-49f3-abfb-401cc0548025'
+    value: '00000000-0000-0000-0000-000000000000'
 
   - name: releaseArtifactName
     value: 'synapse-infra-release'
